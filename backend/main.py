@@ -36,7 +36,7 @@ if DATABASE_URL.startswith("sqlite"):
     engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 else:
     engine = create_engine(DATABASE_URL)
-    
+
 class User(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     username: str = Field(unique=True, index=True)
@@ -263,6 +263,84 @@ def clear_date_votes(target_date: date, current_user: User = Depends(get_current
         session.commit()
         
     return {"status": "success", "message": "All votes cleared"}
+
+@app.get("/api/history")
+def get_history(skip: int = 0, limit: int = 10, specific_date: Optional[str] = None, session: Session = Depends(get_session)):
+    users = session.exec(select(User)).all()
+    id_to_username = {u.id: u.username for u in users}
+
+    # Query all songs, optionally filtering by date
+    if specific_date:
+        try:
+            target = date.fromisoformat(specific_date)
+            songs = session.exec(select(Song).where(Song.submission_date == target)).all()
+        except ValueError:
+            songs = session.exec(select(Song)).all()
+    else:
+        songs = session.exec(select(Song)).all()
+
+    # Group songs by date
+    songs_by_date = {}
+    for s in songs:
+        songs_by_date.setdefault(s.submission_date, []).append(s)
+
+    # Sort dates newest first
+    sorted_dates = sorted(list(songs_by_date.keys()), reverse=True)
+    
+    # Apply pagination
+    paginated_dates = sorted_dates[skip : skip + limit]
+
+    history_feed = []
+    
+    for d in paginated_dates:
+        day_songs = songs_by_date[d]
+        song_ids = [s.id for s in day_songs]
+        
+        # Get all votes for the songs on this day
+        if song_ids:
+            day_votes = session.exec(select(Vote).where(Vote.song_id.in_(song_ids))).all()
+        else:
+            day_votes = []
+            
+        votes_by_song = {s_id: [] for s_id in song_ids}
+        for v in day_votes:
+            votes_by_song[v.song_id].append(v)
+
+        leaderboard = []
+        for s in day_songs:
+            song_votes = votes_by_song[s.id]
+            scores = [v.score for v in song_votes]
+            avg = sum(scores) / len(scores) if scores else 0
+            stdev = statistics.stdev(scores) if len(scores) > 1 else 0
+            
+            # Format votes for the frontend
+            formatted_votes = [{"username": id_to_username.get(v.voter_id, "Unknown"), "score": v.score} for v in song_votes]
+            
+            leaderboard.append({
+                "song_id": s.id,
+                "title": s.title,
+                "artist": s.artist,
+                "submittedBy": id_to_username.get(s.submitter_id, "Unknown"),
+                "average": avg,
+                "stdev": stdev,
+                "votes": formatted_votes
+            })
+
+        # Sort leaderboard by lowest average (1 is best in MPE Moosic)
+        if leaderboard:
+            leaderboard.sort(key=lambda x: (x["average"], x["stdev"]))
+            winner = {"submittedBy": leaderboard[0]["submittedBy"]}
+        else:
+            winner = {"submittedBy": "No votes cast"}
+
+        history_feed.append({
+            "date": d.isoformat(),
+            "winner": winner,
+            "leaderboard": leaderboard
+        })
+
+    return history_feed
+
 
 @app.get("/api/stats")
 def get_global_stats(days: int = 28, session: Session = Depends(get_session)):
