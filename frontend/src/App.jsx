@@ -28,18 +28,23 @@ export default function App() {
 
   const [activeTab, setActiveTab] = useState('daily');
 
-  /*
-   * A user is considered logged in only when BOTH:
-   * - a token exists
-   * - a valid user object exists
-   */
   const isLoggedIn = Boolean(
-    token && currentUser && currentUser.id && currentUser.username
+    token &&
+      currentUser &&
+      currentUser.id &&
+      currentUser.username
   );
 
   const handleLogin = (newToken, userObj) => {
-    localStorage.setItem('moosic_token', newToken);
-    localStorage.setItem('moosic_user', JSON.stringify(userObj));
+    localStorage.setItem(
+      'moosic_token',
+      newToken
+    );
+
+    localStorage.setItem(
+      'moosic_user',
+      JSON.stringify(userObj)
+    );
 
     setToken(newToken);
     setCurrentUser(userObj);
@@ -55,14 +60,24 @@ export default function App() {
     setActiveTab('daily');
   };
 
-  const handleProfileUpdate = (newToken, newUsername) => {
+  const handleProfileUpdate = (
+    newToken,
+    newUsername
+  ) => {
     const updatedUser = {
       ...currentUser,
       username: newUsername
     };
 
-    localStorage.setItem('moosic_token', newToken);
-    localStorage.setItem('moosic_user', JSON.stringify(updatedUser));
+    localStorage.setItem(
+      'moosic_token',
+      newToken
+    );
+
+    localStorage.setItem(
+      'moosic_user',
+      JSON.stringify(updatedUser)
+    );
 
     setToken(newToken);
     setCurrentUser(updatedUser);
@@ -87,24 +102,58 @@ export default function App() {
         <header
           style={{
             display: 'flex',
-            justifyContent: 'space-between',
+            justifyContent:
+              'space-between',
             alignItems: 'center',
             marginBottom: '2rem',
-            borderBottom: '1px solid var(--border-color)',
+            borderBottom:
+              '1px solid var(--border-color)',
             paddingBottom: '1rem'
           }}
         >
-          <h1
+          {/* LOGO + TITLE */}
+          <button
+            onClick={() =>
+              setActiveTab('daily')
+            }
             style={{
-              fontSize: '1.8rem',
-              fontWeight: 'bold',
-              letterSpacing: '-0.5px',
-              margin: 0
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.75rem',
+              background: 'transparent',
+              border: 'none',
+              padding: 0,
+              margin: 0,
+              color: 'inherit',
+              cursor: 'pointer'
             }}
+            aria-label="Go to Moosic home"
           >
-            MPE Moosic
-          </h1>
+            <img
+              src="./public/hamster.png"
+              alt="MPE Moosic logo"
+              style={{
+                width: '52px',
+                height: '52px',
+                objectFit: 'contain',
+                display: 'block'
+              }}
+            />
 
+            <h1
+              style={{
+                fontSize: '1.8rem',
+                fontWeight: 'bold',
+                letterSpacing:
+                  '-0.5px',
+                margin: 0
+              }}
+            >
+              MPE Moosic
+            </h1>
+          </button>
+
+          {/* LOGIN / USER */}
           <div
             style={{
               display: 'flex',
@@ -122,14 +171,16 @@ export default function App() {
               >
                 <span
                   style={{
-                    color: 'var(--text-muted)',
+                    color:
+                      'var(--text-muted)',
                     fontSize: '0.9rem'
                   }}
                 >
                   Logged in as{' '}
                   <strong
                     style={{
-                      color: 'var(--text-main)'
+                      color:
+                        'var(--text-main)'
                     }}
                   >
                     {currentUser.username}
@@ -137,16 +188,22 @@ export default function App() {
                 </span>
 
                 <button
-                  onClick={handleLogout}
+                  onClick={
+                    handleLogout
+                  }
                   style={{
-                    background: 'transparent',
+                    background:
+                      'transparent',
                     color: '#ff4757',
-                    border: '1px solid #ff4757',
-                    padding: '0.4rem 1rem',
+                    border:
+                      '1px solid #ff4757',
+                    padding:
+                      '0.4rem 1rem',
                     borderRadius: '6px',
                     fontWeight: 'bold',
                     cursor: 'pointer',
-                    fontSize: '0.85rem'
+                    fontSize:
+                      '0.85rem'
                   }}
                 >
                   Logout
@@ -154,12 +211,16 @@ export default function App() {
               </div>
             ) : (
               <button
-                onClick={() => setActiveTab('login')}
+                onClick={() =>
+                  setActiveTab('login')
+                }
                 style={{
-                  background: 'var(--accent-green)',
+                  background:
+                    'var(--accent-green)',
                   color: '#000',
                   border: 'none',
-                  padding: '0.5rem 1.2rem',
+                  padding:
+                    '0.5rem 1.2rem',
                   borderRadius: '6px',
                   fontWeight: 'bold',
                   cursor: 'pointer'
@@ -182,27 +243,39 @@ export default function App() {
         >
           <button
             className={`nav-tab ${
-              activeTab === 'daily' ? 'active' : ''
+              activeTab === 'daily'
+                ? 'active'
+                : ''
             }`}
-            onClick={() => setActiveTab('daily')}
+            onClick={() =>
+              setActiveTab('daily')
+            }
           >
             Vote
           </button>
 
           <button
             className={`nav-tab ${
-              activeTab === 'history' ? 'active' : ''
+              activeTab === 'history'
+                ? 'active'
+                : ''
             }`}
-            onClick={() => setActiveTab('history')}
+            onClick={() =>
+              setActiveTab('history')
+            }
           >
             History
           </button>
 
           <button
             className={`nav-tab ${
-              activeTab === 'stats' ? 'active' : ''
+              activeTab === 'stats'
+                ? 'active'
+                : ''
             }`}
-            onClick={() => setActiveTab('stats')}
+            onClick={() =>
+              setActiveTab('stats')
+            }
           >
             Stats
           </button>
@@ -210,9 +283,13 @@ export default function App() {
           {isLoggedIn && (
             <button
               className={`nav-tab ${
-                activeTab === 'profile' ? 'active' : ''
+                activeTab === 'profile'
+                  ? 'active'
+                  : ''
               }`}
-              onClick={() => setActiveTab('profile')}
+              onClick={() =>
+                setActiveTab('profile')
+              }
             >
               Profile
             </button>
@@ -222,7 +299,9 @@ export default function App() {
         {/* CONTENT */}
         <main>
           {activeTab === 'login' && (
-            <Login onLogin={handleLogin} />
+            <Login
+              onLogin={handleLogin}
+            />
           )}
 
           {activeTab === 'history' && (
@@ -235,18 +314,29 @@ export default function App() {
 
           {activeTab === 'daily' && (
             <Daily
-              currentUser={currentUser}
-              onGoToLogin={() => setActiveTab('login')}
-              onLogout={handleLogout}
+              currentUser={
+                currentUser
+              }
+              onGoToLogin={() =>
+                setActiveTab('login')
+              }
+              onLogout={
+                handleLogout
+              }
             />
           )}
 
-          {activeTab === 'profile' && isLoggedIn && (
-            <Profile
-              currentUser={currentUser}
-              onProfileUpdate={handleProfileUpdate}
-            />
-          )}
+          {activeTab === 'profile' &&
+            isLoggedIn && (
+              <Profile
+                currentUser={
+                  currentUser
+                }
+                onProfileUpdate={
+                  handleProfileUpdate
+                }
+              />
+            )}
         </main>
       </div>
     </div>
