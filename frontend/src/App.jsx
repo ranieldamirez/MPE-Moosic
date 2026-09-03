@@ -9,10 +9,16 @@ import './index.css';
 export default function App() {
   const [token, setToken] = useState(() => localStorage.getItem('moosic_token'));
   const [currentUser, setCurrentUser] = useState(() => {
-    const saved = localStorage.getItem('moosic_user');
-    return saved ? JSON.parse(saved) : null;
+    // Treat localStorage as a simple string username to avoid JSON.parse altogether!
+    return localStorage.getItem('moosic_user') || 'User';
   });
   const [activeTab, setActiveTab] = useState('daily');
+  const [isDarkMode, setIsDarkMode] = useState(true);
+
+  const toggleTheme = () => {
+    setIsDarkMode(prev => !prev);
+    document.body.classList.toggle('light-mode');
+  };
 
   useEffect(() => {
     const savedToken = localStorage.getItem('moosic_token');
@@ -21,11 +27,15 @@ export default function App() {
     }
   }, [token]);
 
-  const handleLogin = (newToken, userObj) => {
+  const handleLogin = (newToken, userData) => {
     localStorage.setItem('moosic_token', newToken);
-    localStorage.setItem('moosic_user', JSON.stringify(userObj));
+    
+    // Extract the username string whether userData is an object or a string
+    const username = typeof userData === 'string' ? userData : (userData?.username || 'User');
+    
+    localStorage.setItem('moosic_user', username);
     setToken(newToken);
-    setCurrentUser(userObj);
+    setCurrentUser(username);
     setActiveTab('daily');
   };
 
@@ -33,17 +43,18 @@ export default function App() {
     localStorage.removeItem('moosic_token');
     localStorage.removeItem('moosic_user');
     setToken(null);
-    setCurrentUser(null);
+    setCurrentUser('User');
     setActiveTab('daily');
   };
 
   const isLoggedIn = Boolean(token || localStorage.getItem('moosic_token'));
 
   return (
+
     <div style={{ minHeight: '100vh', background: 'var(--bg-primary)', color: 'var(--text-main)', padding: '2rem' }}>
       
       {/* Centered Max-Width Wrapper to prevent wide-screen stretching */}
-      <div style={{ maxWidth: '1200px', margin: '0 auto' }}>
+      <div style={{ maxWidth: '1375px', margin: '0 auto' }}>
         
         <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '1rem' }}>
           <h1 style={{ fontSize: '1.8rem', fontWeight: 'bold', letterSpacing: '-0.5px' }}>MPE • Moosic</h1>
@@ -53,7 +64,7 @@ export default function App() {
               <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                 <span style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
                   Signed in as <strong style={{ color: 'var(--text-main)' }}>
-                    {typeof currentUser === 'string' ? currentUser : (currentUser?.username || localStorage.getItem('user') || 'User')}
+                    {typeof currentUser === 'string' ? currentUser : (currentUser?.username || localStorage.getItem('moosic_user') || 'User')}
                   </strong>
                 </span>
                 <button onClick={handleLogout} style={{

@@ -32,22 +32,24 @@ export default function Daily({ currentUser, onGoToLogin }) {
   const [targetSongs, setTargetSongs] = useState([]);
   const [myVotes, setMyVotes] = useState({}); 
   const [savedVotes, setSavedVotes] = useState({}); 
-  const [totalUserCount, setTotalUserCount] = useState(5); // Default to 5 users
+  const [totalUserCount, setTotalUserCount] = useState(5); 
   const [isLoadingSongs, setIsLoadingSongs] = useState(true);
   const [isSubmittingVotes, setIsSubmittingVotes] = useState(false);
+
+  const getToken = () => localStorage.getItem('moosic_token') || localStorage.getItem('token');
 
   const fetchDataForDate = useCallback(async () => {
     if (!selectedDate) return;
     setIsLoadingSongs(true);
     setVoteError(null);
-    const token = localStorage.getItem('moosic_token');
+    const token = getToken();
     
     try {
+      const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+
       const [songsRes, votesRes, statsRes] = await Promise.all([
         fetch(`${import.meta.env.VITE_API_URL}/api/songs/daily/${selectedDate}`),
-        fetch(`${import.meta.env.VITE_API_URL}/api/votes/me/${selectedDate}`, {
-          headers: { 'Authorization': `Bearer ${token}` }
-        }),
+        fetch(`${import.meta.env.VITE_API_URL}/api/votes/me/${selectedDate}`, { headers }),
         fetch(`${import.meta.env.VITE_API_URL}/api/stats`)
       ]);
       
@@ -116,7 +118,8 @@ export default function Daily({ currentUser, onGoToLogin }) {
   };
 
   const handleDatabaseSubmit = async () => {
-    const token = localStorage.getItem('moosic_token');
+    const token = getToken();
+    const submitterId = typeof currentUser === 'object' ? currentUser?.id : 1;
 
     try {
       const response = await fetch(`${import.meta.env.VITE_API_URL}/api/songs`, {
@@ -128,7 +131,7 @@ export default function Daily({ currentUser, onGoToLogin }) {
         body: JSON.stringify({
           title: previewData.title,
           artist: previewData.artist,
-          submitter_id: currentUser.id, 
+          submitter_id: submitterId, 
           submission_date: selectedDate
         })
       });
@@ -139,7 +142,8 @@ export default function Daily({ currentUser, onGoToLogin }) {
         setPreviewData(null);
         fetchDataForDate(); 
       } else {
-        setSubmitStatus("Error saving track. Please try again.");
+        const errJson = await response.json().catch(() => ({}));
+        setSubmitStatus(errJson.detail || "Error saving track. Please try again.");
       }
     } catch (err) {
       setSubmitStatus("Error saving track.");
@@ -170,20 +174,18 @@ export default function Daily({ currentUser, onGoToLogin }) {
     });
   };
 
-  // Validation checks
   const allSongsHaveScores = targetSongs.length > 0 && targetSongs.every(song => myVotes[song.id] !== undefined);
   const allSongsPosted = targetSongs.length === totalUserCount;
   const hasChanges = JSON.stringify(myVotes) !== JSON.stringify(savedVotes);
   const hasExistingSaves = Object.keys(savedVotes).length > 0;
 
-  // Can only submit if all songs are posted, all have scores, and there are changes (or initial submission)
   const canSubmit = allSongsPosted && allSongsHaveScores && (hasChanges || !hasExistingSaves);
 
   const handleSubmitBatchVotes = async () => {
     if (!canSubmit) return;
     setVoteError(null);
     setIsSubmittingVotes(true);
-    const token = localStorage.getItem('moosic_token');
+    const token = getToken();
 
     try {
       for (const song of targetSongs) {
@@ -222,6 +224,8 @@ export default function Daily({ currentUser, onGoToLogin }) {
     setVoteError(null);
   };
 
+  const displayUsername = typeof currentUser === 'string' ? currentUser : (currentUser?.username || 'User');
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
       
@@ -239,7 +243,7 @@ export default function Daily({ currentUser, onGoToLogin }) {
             style={{ padding: '0.6rem 1rem', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-main)', fontSize: '1rem', cursor: 'pointer' }}
           />
           <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
-            As <strong style={{ color: 'var(--text-main)' }}>{currentUser.username}</strong>
+            As <strong style={{ color: 'var(--text-main)' }}>{displayUsername}</strong>
           </span>
         </div>
       </div>

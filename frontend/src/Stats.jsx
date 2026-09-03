@@ -31,11 +31,11 @@ const Th = ({ children, align = 'center', bg = 'var(--bg-secondary)' }) => (
 );
 
 const MatrixTable = ({ title, daysFilter, users, dataObj }) => (
-  <div style={{ background: 'var(--bg-card)', borderRadius: '8px', border: '1px solid var(--border-color)', overflow: 'hidden' }}>
+  <div style={{ background: 'var(--bg-card)', borderRadius: '8px', border: '1px solid var(--border-color)', overflow: 'hidden', width: '100%' }}>
     <div style={{ background: '#000', padding: '0.5rem', textAlign: 'center', borderBottom: '1px solid var(--border-color)' }}>
       <h3 style={{ margin: 0, fontSize: '0.95rem' }}>{title} <span style={{color: 'var(--accent-green)'}}>{daysFilter}</span> days</h3>
     </div>
-    <div style={{ overflowX: 'auto' }}>
+    <div style={{ overflowX: 'auto', width: '100%' }}>
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
         <thead>
           <tr>
@@ -231,7 +231,7 @@ export default function Stats() {
 
       {/* Third Row: The 6 Matrices Grid */}
       {stats.matrices && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(350px, 1fr))', gap: '1rem' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(550px, 1fr))', gap: '1rem' }}>
           <MatrixTable title="Average Score for past" daysFilter={daysFilter} users={users} dataObj={stats.matrices.average} />
           <MatrixTable title="Median Score for past" daysFilter={daysFilter} users={users} dataObj={stats.matrices.median} />
           <MatrixTable title="Standard Deviation for past" daysFilter={daysFilter} users={users} dataObj={stats.matrices.stdev} />
