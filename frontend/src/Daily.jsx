@@ -13,288 +13,150 @@ const getUserColor = (username) =>
   USER_COLORS[username?.toLowerCase()] || '#ffffff';
 
 const getScoreColor = (score) => {
-  const validScore = Math.max(1, Math.min(5, score));
-  const hue = 120 - ((validScore - 1) * 30);
-
+  const hue = 120 - ((Math.max(1, Math.min(5, score)) - 1) * 30);
   return `hsl(${hue}, 80%, 60%)`;
 };
 
-export default function Daily({
-  currentUser,
-  onGoToLogin
-}) {
+export default function Daily({ currentUser, onGoToLogin }) {
   const getTodayString = () => {
     const today = new Date();
-
-    return new Date(
-      today.getTime() -
-        (today.getTimezoneOffset() * 60000)
-    )
+    return new Date(today.getTime() - today.getTimezoneOffset() * 60000)
       .toISOString()
       .split('T')[0];
   };
 
-  const [selectedDate, setSelectedDate] =
-    useState(getTodayString());
+  const [selectedDate, setSelectedDate] = useState(getTodayString());
+  const [targetSongs, setTargetSongs] = useState([]);
+  const [myVotes, setMyVotes] = useState({});
+  const [savedVotes, setSavedVotes] = useState({});
+  const [totalUserCount, setTotalUserCount] = useState(5);
+  const [isLoadingSongs, setIsLoadingSongs] = useState(true);
+  const [voteError, setVoteError] = useState(null);
+  const [submitStatus, setSubmitStatus] = useState(null);
+  const [isSubmittingVotes, setIsSubmittingVotes] = useState(false);
 
-  const [spotifyUrl, setSpotifyUrl] =
-    useState('');
+  const [spotifyUrl, setSpotifyUrl] = useState('');
+  const [previewData, setPreviewData] = useState(null);
+  const [isPreviewing, setIsPreviewing] = useState(false);
 
-  const [previewData, setPreviewData] =
-    useState(null);
-
-  const [submitStatus, setSubmitStatus] =
-    useState(null);
-
-  const [voteError, setVoteError] =
-    useState(null);
-
-  const [targetSongs, setTargetSongs] =
-    useState([]);
-
-  const [myVotes, setMyVotes] =
-    useState({});
-
-  const [savedVotes, setSavedVotes] =
-    useState({});
-
-  const [totalUserCount, setTotalUserCount] =
-    useState(5);
-
-  const [isLoadingSongs, setIsLoadingSongs] =
-    useState(true);
-
-  const [isSubmittingVotes, setIsSubmittingVotes] =
-    useState(false);
-
-  // ==========================================================
-  // EDIT STATE
-  // ==========================================================
-
-  const [editingSong, setEditingSong] =
-    useState(null);
-
-  const [editSpotifyUrl, setEditSpotifyUrl] =
-    useState('');
-
-  const [editPreviewData, setEditPreviewData] =
-    useState(null);
-
-  const [isUpdatingSong, setIsUpdatingSong] =
-    useState(false);
-
-  const [isPreviewing, setIsPreviewing] =
-    useState(false);
-
-  const [isPreviewingEdit, setIsPreviewingEdit] =
-    useState(false);
-
-  // ==========================================================
-  // AUTH
-  // ==========================================================
+  const [editingSong, setEditingSong] = useState(null);
+  const [editSpotifyUrl, setEditSpotifyUrl] = useState('');
+  const [editPreviewData, setEditPreviewData] = useState(null);
+  const [isPreviewingEdit, setIsPreviewingEdit] = useState(false);
+  const [isUpdatingSong, setIsUpdatingSong] = useState(false);
 
   const handleUnauthorized = useCallback(() => {
     localStorage.removeItem('moosic_token');
     localStorage.removeItem('moosic_user');
-
     onGoToLogin();
   }, [onGoToLogin]);
 
-  // ==========================================================
-  // LOAD DATA
-  // ==========================================================
-
   const fetchDataForDate = useCallback(async () => {
-    if (!selectedDate || !currentUser) {
-      return;
-    }
-
     setIsLoadingSongs(true);
     setVoteError(null);
 
-    const token =
-      localStorage.getItem('moosic_token');
-
-    if (!token) {
-      handleUnauthorized();
-      return;
-    }
-
     try {
-      const [
-        songsRes,
-        votesRes,
-        statsRes
-      ] = await Promise.all([
-        fetch(
-          `${import.meta.env.VITE_API_URL}/api/songs/daily/${selectedDate}`
-        ),
+      // Public: everyone can see songs and all submitted votes.
+      const songsResponse = await fetch(
+        `${import.meta.env.VITE_API_URL}/api/songs/daily/${selectedDate}`
+      );
 
-        fetch(
+      if (!songsResponse.ok) {
+        throw new Error('Failed to load the daily results.');
+      }
+
+      const songs = await songsResponse.json();
+      setTargetSongs(songs);
+
+      // Public: user count can be displayed without authentication.
+      const statsResponse = await fetch(
+        `${import.meta.env.VITE_API_URL}/api/stats`
+      );
+
+      if (statsResponse.ok) {
+        const stats = await statsResponse.json();
+        if (Array.isArray(stats.usernames)) {
+          setTotalUserCount(stats.usernames.length);
+        }
+      }
+
+      // Private: only fetch the current user's personal selections when logged in.
+      if (currentUser) {
+        const token = localStorage.getItem('moosic_token');
+        if (!token) {
+          handleUnauthorized();
+          return;
+        }
+
+        const myVotesResponse = await fetch(
           `${import.meta.env.VITE_API_URL}/api/votes/me/${selectedDate}`,
           {
             headers: {
-              Authorization:
-                `Bearer ${token}`
+              Authorization: `Bearer ${token}`
             }
           }
-        ),
+        );
 
-        fetch(
-          `${import.meta.env.VITE_API_URL}/api/stats`
-        )
-      ]);
+        if (myVotesResponse.status === 401) {
+          handleUnauthorized();
+          return;
+        }
 
-      if (votesRes.status === 401) {
-        handleUnauthorized();
-        return;
-      }
-
-      if (songsRes.ok) {
-        const songs =
-          await songsRes.json();
-
-        setTargetSongs(songs);
-      } else {
-        setTargetSongs([]);
-      }
-
-      if (votesRes.ok) {
-        const voteData =
-          await votesRes.json();
-
-        setMyVotes(voteData);
-        setSavedVotes(voteData);
+        if (myVotesResponse.ok) {
+          const voteData = await myVotesResponse.json();
+          setMyVotes(voteData);
+          setSavedVotes(voteData);
+        } else {
+          setMyVotes({});
+          setSavedVotes({});
+        }
       } else {
         setMyVotes({});
         setSavedVotes({});
       }
-
-      if (statsRes.ok) {
-        const statsData =
-          await statsRes.json();
-
-        if (
-          Array.isArray(
-            statsData.usernames
-          )
-        ) {
-          setTotalUserCount(
-            statsData.usernames.length
-          );
-        }
-      }
-
-    } catch (err) {
-      console.error(
-        'Failed to load data for date:',
-        err
-      );
-
-      setVoteError(
-        'Failed to load the voting data.'
-      );
-
+    } catch (error) {
+      console.error('Failed to load daily results:', error);
+      setVoteError(error.message || 'Failed to load the daily results.');
     } finally {
       setIsLoadingSongs(false);
     }
-  }, [
-    selectedDate,
-    currentUser,
-    handleUnauthorized
-  ]);
+  }, [selectedDate, currentUser, handleUnauthorized]);
 
   useEffect(() => {
-    if (currentUser) {
-      fetchDataForDate();
-    }
-  }, [
-    currentUser,
-    selectedDate,
-    fetchDataForDate
-  ]);
+    fetchDataForDate();
+  }, [fetchDataForDate]);
 
-  // ==========================================================
-  // LOGGED OUT
-  // ==========================================================
+  const mySong = currentUser
+    ? targetSongs.find(
+        (song) => Number(song.submitter_id) === Number(currentUser.id)
+      )
+    : null;
 
-  if (!currentUser) {
-    return (
-      <div
-        style={{
-          textAlign: 'center',
-          marginTop: '3rem',
-          padding: '2rem',
-          background: 'var(--bg-card)',
-          borderRadius: '12px',
-          border:
-            '1px solid var(--border-color)'
-        }}
-      >
-        <h2
-          style={{
-            marginBottom: '1rem'
-          }}
-        >
-          Ready to vote?
-        </h2>
+  const allSongsPosted =
+    targetSongs.length > 0 && targetSongs.length === totalUserCount;
 
-        <p
-          style={{
-            color: 'var(--text-muted)',
-            marginBottom: '1.5rem'
-          }}
-        >
-          You must be logged in to submit
-          tracks and cast your votes.
-        </p>
+  const allSongsHaveScores =
+    targetSongs.length > 0 &&
+    targetSongs.every((song) => myVotes[song.id] !== undefined);
 
-        <button
-          onClick={onGoToLogin}
-          style={{
-            background:
-              'var(--accent-green)',
-            color: '#000',
-            border: 'none',
-            padding:
-              '0.8rem 2rem',
-            borderRadius: '8px',
-            fontWeight: 'bold',
-            cursor: 'pointer'
-          }}
-        >
-          Go to Login
-        </button>
-      </div>
-    );
-  }
+  const hasChanges =
+    JSON.stringify(myVotes) !== JSON.stringify(savedVotes);
 
-  // ==========================================================
-  // CURRENT USER'S SONG
-  // ==========================================================
+  const hasExistingSaves = Object.keys(savedVotes).length > 0;
 
-  const mySong = targetSongs.find(
-    (song) =>
-      Number(song.submitter_id) ===
-      Number(currentUser.id)
-  );
+  const canSubmitVotes =
+    Boolean(currentUser) &&
+    allSongsPosted &&
+    allSongsHaveScores &&
+    (hasChanges || !hasExistingSaves);
 
-  // ==========================================================
-  // SPOTIFY PREVIEW FOR NEW SUBMISSION
-  // ==========================================================
+  const handlePreview = async (event) => {
+    event.preventDefault();
+    if (!spotifyUrl) return;
 
-  const handlePreview = async (e) => {
-    e.preventDefault();
-
-    if (!spotifyUrl) {
-      return;
-    }
-
-    const token =
-      localStorage.getItem('moosic_token');
-
+    const token = localStorage.getItem('moosic_token');
     if (!token) {
-      handleUnauthorized();
+      onGoToLogin();
       return;
     }
 
@@ -307,14 +169,10 @@ export default function Daily({
         {
           method: 'POST',
           headers: {
-            'Content-Type':
-              'application/json',
-            Authorization:
-              `Bearer ${token}`
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`
           },
-          body: JSON.stringify({
-            url: spotifyUrl
-          })
+          body: JSON.stringify({ url: spotifyUrl })
         }
       );
 
@@ -323,44 +181,27 @@ export default function Daily({
         return;
       }
 
-      const data =
-        await response.json();
-
-      if (response.ok) {
-        setPreviewData(data);
-      } else {
-        setSubmitStatus(
-          data.detail ||
-          'Failed to fetch metadata.'
-        );
+      const data = await response.json();
+      if (!response.ok) {
+        setSubmitStatus(data.detail || 'Failed to fetch metadata.');
+        return;
       }
 
-    } catch (err) {
-      console.error(err);
-
-      setSubmitStatus(
-        'Error connecting to Spotify.'
-      );
-
+      setPreviewData(data);
+    } catch (error) {
+      console.error(error);
+      setSubmitStatus('Error connecting to Spotify.');
     } finally {
       setIsPreviewing(false);
     }
   };
 
-  // ==========================================================
-  // CREATE NEW SONG
-  // ==========================================================
-
   const handleDatabaseSubmit = async () => {
-    if (!previewData) {
-      return;
-    }
+    if (!previewData) return;
 
-    const token =
-      localStorage.getItem('moosic_token');
-
+    const token = localStorage.getItem('moosic_token');
     if (!token) {
-      handleUnauthorized();
+      onGoToLogin();
       return;
     }
 
@@ -372,27 +213,15 @@ export default function Daily({
         {
           method: 'POST',
           headers: {
-            'Content-Type':
-              'application/json',
-            Authorization:
-              `Bearer ${token}`
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`
           },
           body: JSON.stringify({
-            title:
-              previewData.title,
-            artist:
-              previewData.artist,
-
-            spotify_url:
-              previewData.spotify_url ||
-              spotifyUrl,
-
-            spotify_track_id:
-              previewData.spotify_track_id ||
-              null,
-
-            submission_date:
-              selectedDate
+            title: previewData.title,
+            artist: previewData.artist,
+            spotify_url: previewData.spotify_url || spotifyUrl,
+            spotify_track_id: previewData.spotify_track_id || null,
+            submission_date: selectedDate
           })
         }
       );
@@ -402,56 +231,26 @@ export default function Daily({
         return;
       }
 
-      const data =
-        await response.json();
-
-      if (response.ok) {
-        setSubmitStatus(
-          `Success! "${data.title}" added for ${selectedDate}.`
-        );
-
-        setSpotifyUrl('');
-        setPreviewData(null);
-
-        await fetchDataForDate();
-
-      } else {
-        setSubmitStatus(
-          data.detail ||
-          'Error saving track.'
-        );
+      const data = await response.json();
+      if (!response.ok) {
+        setSubmitStatus(data.detail || 'Error saving track.');
+        return;
       }
 
-    } catch (err) {
-      console.error(err);
-
-      setSubmitStatus(
-        'Error saving track.'
-      );
+      setSubmitStatus(`Success! "${data.title}" added for ${selectedDate}.`);
+      setSpotifyUrl('');
+      setPreviewData(null);
+      await fetchDataForDate();
+    } catch (error) {
+      console.error(error);
+      setSubmitStatus('Error saving track.');
     }
   };
 
-  // ==========================================================
-  // BEGIN EDITING
-  // ==========================================================
-
   const startEditingSong = (song) => {
     setEditingSong(song);
-
-    setEditSpotifyUrl(
-      song.spotify_url || ''
-    );
-
-    setEditPreviewData({
-      title: song.title,
-      artist: song.artist,
-      cover_art_url: null,
-      spotify_url:
-        song.spotify_url || '',
-      spotify_track_id:
-        song.spotify_track_id || null
-    });
-
+    setEditSpotifyUrl(song.spotify_url || '');
+    setEditPreviewData(null);
     setSubmitStatus(null);
   };
 
@@ -462,22 +261,13 @@ export default function Daily({
     setSubmitStatus(null);
   };
 
-  // ==========================================================
-  // PREVIEW EDITED SPOTIFY TRACK
-  // ==========================================================
+  const handleEditPreview = async (event) => {
+    event.preventDefault();
+    if (!editSpotifyUrl) return;
 
-  const handleEditPreview = async (e) => {
-    e.preventDefault();
-
-    if (!editSpotifyUrl) {
-      return;
-    }
-
-    const token =
-      localStorage.getItem('moosic_token');
-
+    const token = localStorage.getItem('moosic_token');
     if (!token) {
-      handleUnauthorized();
+      onGoToLogin();
       return;
     }
 
@@ -490,14 +280,10 @@ export default function Daily({
         {
           method: 'POST',
           headers: {
-            'Content-Type':
-              'application/json',
-            Authorization:
-              `Bearer ${token}`
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`
           },
-          body: JSON.stringify({
-            url: editSpotifyUrl
-          })
+          body: JSON.stringify({ url: editSpotifyUrl })
         }
       );
 
@@ -506,47 +292,27 @@ export default function Daily({
         return;
       }
 
-      const data =
-        await response.json();
-
-      if (response.ok) {
-        setEditPreviewData(data);
-      } else {
-        setSubmitStatus(
-          data.detail ||
-          'Failed to fetch metadata.'
-        );
+      const data = await response.json();
+      if (!response.ok) {
+        setSubmitStatus(data.detail || 'Failed to fetch metadata.');
+        return;
       }
 
-    } catch (err) {
-      console.error(err);
-
-      setSubmitStatus(
-        'Error connecting to Spotify.'
-      );
-
+      setEditPreviewData(data);
+    } catch (error) {
+      console.error(error);
+      setSubmitStatus('Error connecting to Spotify.');
     } finally {
       setIsPreviewingEdit(false);
     }
   };
 
-  // ==========================================================
-  // SAVE EDIT
-  // ==========================================================
-
   const handleUpdateSong = async () => {
-    if (
-      !editingSong ||
-      !editPreviewData
-    ) {
-      return;
-    }
+    if (!editingSong || !editPreviewData) return;
 
-    const token =
-      localStorage.getItem('moosic_token');
-
+    const token = localStorage.getItem('moosic_token');
     if (!token) {
-      handleUnauthorized();
+      onGoToLogin();
       return;
     }
 
@@ -559,25 +325,14 @@ export default function Daily({
         {
           method: 'PUT',
           headers: {
-            'Content-Type':
-              'application/json',
-            Authorization:
-              `Bearer ${token}`
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`
           },
           body: JSON.stringify({
-            title:
-              editPreviewData.title,
-
-            artist:
-              editPreviewData.artist,
-
-            spotify_url:
-              editPreviewData.spotify_url ||
-              editSpotifyUrl,
-
-            spotify_track_id:
-              editPreviewData.spotify_track_id ||
-              null
+            title: editPreviewData.title,
+            artist: editPreviewData.artist,
+            spotify_url: editPreviewData.spotify_url || editSpotifyUrl,
+            spotify_track_id: editPreviewData.spotify_track_id || null
           })
         }
       );
@@ -587,1460 +342,493 @@ export default function Daily({
         return;
       }
 
-      const data =
-        await response.json();
-
+      const data = await response.json();
       if (!response.ok) {
-        setSubmitStatus(
-          data.detail ||
-          'Failed to update song.'
-        );
-
+        setSubmitStatus(data.detail || 'Failed to update song.');
         return;
-      }
-
-      if (data.votes_reset) {
-        setSubmitStatus(
-          'Song updated. Votes for the old song were reset.'
-        );
-      } else {
-        setSubmitStatus(
-          'Song updated successfully!'
-        );
       }
 
       setEditingSong(null);
       setEditSpotifyUrl('');
       setEditPreviewData(null);
-
-      await fetchDataForDate();
-
-    } catch (err) {
-      console.error(err);
-
       setSubmitStatus(
-        'Error updating song.'
+        data.votes_reset
+          ? 'Song updated. Votes for the old song were reset.'
+          : 'Song updated successfully!'
       );
 
+      await fetchDataForDate();
+    } catch (error) {
+      console.error(error);
+      setSubmitStatus('Error updating song.');
     } finally {
       setIsUpdatingSong(false);
     }
   };
 
-  // ==========================================================
-  // VOTING
-  // ==========================================================
+  const handleScoreClick = (songId, score) => {
+    if (!currentUser) {
+      onGoToLogin();
+      return;
+    }
 
-  const handleScoreClick = (
-    songId,
-    score
-  ) => {
     setVoteError(null);
 
-    setMyVotes((prev) => {
-      const currentAssignedScore =
-        prev[songId];
-
-      if (
-        currentAssignedScore ===
-        score
-      ) {
-        const updated = {
-          ...prev
-        };
-
-        delete updated[songId];
-
-        return updated;
+    setMyVotes((previous) => {
+      if (previous[songId] === score) {
+        const next = { ...previous };
+        delete next[songId];
+        return next;
       }
 
-      const isScoreTakenElsewhere =
-        Object.entries(prev).some(
-          ([existingSongId, existingScore]) =>
-            Number(existingSongId) !==
-              Number(songId) &&
-            existingScore === score
-        );
+      const scoreTaken = Object.entries(previous).some(
+        ([existingSongId, existingScore]) =>
+          Number(existingSongId) !== Number(songId) &&
+          Number(existingScore) === Number(score)
+      );
 
-      if (isScoreTakenElsewhere) {
-        setVoteError(
-          `Score ${score} is already assigned to another track.`
-        );
-
-        return prev;
+      if (scoreTaken) {
+        setVoteError(`Score ${score} is already assigned to another track.`);
+        return previous;
       }
 
-      return {
-        ...prev,
-        [songId]: score
-      };
+      return { ...previous, [songId]: score };
     });
   };
 
-  const allSongsHaveScores =
-    targetSongs.length > 0 &&
-    targetSongs.every(
-      (song) =>
-        myVotes[song.id] !==
-        undefined
-    );
+  const handleSubmitBatchVotes = async () => {
+    if (!canSubmitVotes) return;
 
-  const allSongsPosted =
-    targetSongs.length ===
-    totalUserCount;
+    const token = localStorage.getItem('moosic_token');
+    if (!token) {
+      onGoToLogin();
+      return;
+    }
 
-  const hasChanges =
-    JSON.stringify(myVotes) !==
-    JSON.stringify(savedVotes);
+    setIsSubmittingVotes(true);
+    setVoteError(null);
 
-  const hasExistingSaves =
-    Object.keys(savedVotes).length >
-    0;
+    try {
+      for (const song of targetSongs) {
+        const targetScore = myVotes[song.id];
+        const previousScore = savedVotes[song.id];
 
-  const canSubmit =
-    allSongsPosted &&
-    allSongsHaveScores &&
-    (
-      hasChanges ||
-      !hasExistingSaves
-    );
+        if (targetScore === previousScore) continue;
 
-  // ==========================================================
-  // SAVE VOTES
-  // ==========================================================
+        let response;
 
-  const handleSubmitBatchVotes =
-    async () => {
-      if (!canSubmit) {
-        return;
-      }
-
-      const token =
-        localStorage.getItem(
-          'moosic_token'
-        );
-
-      if (!token) {
-        handleUnauthorized();
-        return;
-      }
-
-      setVoteError(null);
-      setIsSubmittingVotes(true);
-
-      try {
-        for (const song of targetSongs) {
-          const targetScore =
-            myVotes[song.id];
-
-          const previousScore =
-            savedVotes[song.id];
-
-          if (
-            targetScore ===
-            previousScore
-          ) {
-            continue;
-          }
-
-          let response;
-
-          if (
-            targetScore ===
-            undefined
-          ) {
-            response = await fetch(
-              `${import.meta.env.VITE_API_URL}/api/votes/${song.id}`,
-              {
-                method: 'DELETE',
-                headers: {
-                  Authorization:
-                    `Bearer ${token}`
-                }
-              }
-            );
-
-          } else {
-            response = await fetch(
-              `${import.meta.env.VITE_API_URL}/api/votes`,
-              {
-                method: 'POST',
-                headers: {
-                  'Content-Type':
-                    'application/json',
-                  Authorization:
-                    `Bearer ${token}`
-                },
-                body: JSON.stringify({
-                  song_id:
-                    song.id,
-                  score:
-                    targetScore
-                })
-              }
-            );
-          }
-
-          if (
-            response.status === 401
-          ) {
-            handleUnauthorized();
-            return;
-          }
-
-          if (!response.ok) {
-            const errorData =
-              await response.json()
-                .catch(() => ({}));
-
-            throw new Error(
-              errorData.detail ||
-              'Failed to save votes.'
-            );
-          }
+        if (targetScore === undefined) {
+          response = await fetch(
+            `${import.meta.env.VITE_API_URL}/api/votes/${song.id}`,
+            {
+              method: 'DELETE',
+              headers: { Authorization: `Bearer ${token}` }
+            }
+          );
+        } else {
+          response = await fetch(
+            `${import.meta.env.VITE_API_URL}/api/votes`,
+            {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${token}`
+              },
+              body: JSON.stringify({
+                song_id: song.id,
+                score: targetScore
+              })
+            }
+          );
         }
 
-        setSavedVotes({
-          ...myVotes
-        });
+        if (response.status === 401) {
+          handleUnauthorized();
+          return;
+        }
 
-      } catch (err) {
-        console.error(err);
-
-        setVoteError(
-          err.message ||
-          'Failed to sync votes with server.'
-        );
-
-      } finally {
-        setIsSubmittingVotes(false);
+        if (!response.ok) {
+          const data = await response.json().catch(() => ({}));
+          throw new Error(data.detail || 'Failed to save votes.');
+        }
       }
-    };
 
-  const handleClearAllVotesLocally =
-    () => {
-      setMyVotes({});
-      setVoteError(null);
-    };
+      // Reload from the server so the public vote display immediately matches reality.
+      await fetchDataForDate();
+    } catch (error) {
+      console.error(error);
+      setVoteError(error.message || 'Failed to save votes.');
+    } finally {
+      setIsSubmittingVotes(false);
+    }
+  };
 
-  // ==========================================================
-  // RENDER
-  // ==========================================================
+  const handleClearAllVotesLocally = () => {
+    if (!currentUser) {
+      onGoToLogin();
+      return;
+    }
+    setMyVotes({});
+    setVoteError(null);
+  };
 
   return (
-    <div
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '2rem'
-      }}
-    >
-      {/* ==================================================== */}
-      {/* DATE SELECTOR */}
-      {/* ==================================================== */}
-
-      <div
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+      {/* Header */}
+      <section
         style={{
-          background:
-            'var(--bg-card)',
-          padding:
-            '1.5rem 2rem',
-          borderRadius:
-            'var(--border-radius-lg)',
-          border:
-            '1px solid var(--border-color)',
+          background: 'var(--bg-card)',
+          padding: '1.5rem 2rem',
+          borderRadius: 'var(--border-radius-lg)',
+          border: '1px solid var(--border-color)',
           display: 'flex',
-          justifyContent:
-            'space-between',
+          justifyContent: 'space-between',
           alignItems: 'center',
           flexWrap: 'wrap',
           gap: '1rem'
         }}
       >
         <div>
-          <h2
-            style={{
-              fontSize: '1.3rem',
-              margin: 0
-            }}
-          >
-            Manage Day
-          </h2>
-
-          <p
-            style={{
-              color:
-                'var(--text-muted)',
-              fontSize: '0.85rem',
-              margin:
-                '0.2rem 0 0 0'
-            }}
-          >
-            Select a past or present
-            date to submit, edit, or
-            vote.
+          <h2 style={{ margin: 0, fontSize: '1.5rem' }}>Daily Moosic</h2>
+          <p style={{ color: 'var(--text-muted)', margin: '0.35rem 0 0' }}>
+            Browse the songs and see exactly how everyone voted.
           </p>
         </div>
 
-        <div
+        <input
+          type="date"
+          value={selectedDate}
+          onChange={(event) => setSelectedDate(event.target.value)}
           style={{
+            padding: '0.65rem 0.9rem',
+            borderRadius: '8px',
+            border: '1px solid var(--border-color)',
+            background: 'var(--bg-secondary)',
+            color: 'var(--text-main)',
+            fontSize: '1rem'
+          }}
+        />
+      </section>
+
+      {/* Logged-out participation banner */}
+      {!currentUser && (
+        <section
+          style={{
+            background: 'linear-gradient(135deg, rgba(29,185,84,0.12), rgba(29,185,84,0.04))',
+            border: '1px solid rgba(29,185,84,0.35)',
+            borderRadius: '14px',
+            padding: '1rem 1.25rem',
             display: 'flex',
+            justifyContent: 'space-between',
             alignItems: 'center',
-            gap: '1rem'
+            gap: '1rem',
+            flexWrap: 'wrap'
           }}
         >
-          <input
-            type="date"
-            value={selectedDate}
-            onChange={(e) =>
-              setSelectedDate(
-                e.target.value
-              )
-            }
+          <div>
+            <strong>You're viewing Moosic in read-only mode.</strong>
+            <div style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginTop: '0.2rem' }}>
+              Log in to submit a song or cast your own votes.
+            </div>
+          </div>
+          <button
+            onClick={onGoToLogin}
             style={{
-              padding:
-                '0.6rem 1rem',
+              background: 'var(--accent-green)',
+              color: '#000',
+              border: 'none',
+              padding: '0.65rem 1.2rem',
               borderRadius: '8px',
-              border:
-                '1px solid var(--border-color)',
-              background:
-                'var(--bg-secondary)',
-              color:
-                'var(--text-main)',
-              fontSize: '1rem',
-              cursor: 'pointer'
-            }}
-          />
-
-          <span
-            style={{
-              fontSize: '0.9rem',
-              color:
-                'var(--text-muted)'
+              fontWeight: 'bold',
+              cursor: 'pointer',
+              whiteSpace: 'nowrap'
             }}
           >
-            As{' '}
-            <strong
-              style={{
-                color:
-                  'var(--text-main)'
-              }}
-            >
-              {currentUser.username}
-            </strong>
-          </span>
-        </div>
-      </div>
+            Log In to Participate
+          </button>
+        </section>
+      )}
 
-      {/* ==================================================== */}
-      {/* MY CURRENT SUBMISSION / NEW SUBMISSION */}
-      {/* ==================================================== */}
-
-      <div
-        style={{
-          background:
-            'var(--bg-card)',
-          padding: '2rem',
-          borderRadius:
-            'var(--border-radius-lg)',
-          border:
-            '1px solid var(--border-color)'
-        }}
-      >
-        {mySong ? (
-          <>
-            <div
-              style={{
-                display: 'flex',
-                justifyContent:
-                  'space-between',
-                alignItems:
-                  'center',
-                gap: '1rem',
-                flexWrap:
-                  'wrap'
-              }}
-            >
-              <div>
-                <h3
-                  style={{
-                    fontSize:
-                      '1.1rem',
-                    margin: 0
-                  }}
-                >
-                  Your Song for{' '}
-                  {selectedDate}
-                </h3>
-
-                <p
-                  style={{
-                    margin:
-                      '0.5rem 0 0 0',
-                    color:
-                      'var(--text-muted)'
-                  }}
-                >
-                  <strong
-                    style={{
-                      color:
-                        'var(--text-main)'
-                    }}
-                  >
-                    {mySong.title}
-                  </strong>
-                  {' — '}
-                  {mySong.artist}
-                </p>
-
-                {mySong.spotify_url && (
-                  <a
-                    href={
-                      mySong.spotify_url
-                    }
-                    target="_blank"
-                    rel="noreferrer"
-                    style={{
-                      display:
-                        'inline-block',
-                      marginTop:
-                        '0.5rem',
-                      color:
-                        'var(--accent-green)',
-                      fontSize:
-                        '0.85rem'
-                    }}
-                  >
-                    Open in Spotify
-                  </a>
-                )}
-              </div>
-
-              <button
-                onClick={() =>
-                  startEditingSong(
-                    mySong
-                  )
-                }
-                style={{
-                  background:
-                    'transparent',
-                  color:
-                    'var(--accent-green)',
-                  border:
-                    '1px solid var(--accent-green)',
-                  padding:
-                    '0.6rem 1.2rem',
-                  borderRadius:
-                    '8px',
-                  fontWeight:
-                    'bold',
-                  cursor:
-                    'pointer'
-                }}
-              >
-                Edit My Song
-              </button>
-            </div>
-          </>
-        ) : (
-          <>
-            <h3
-              style={{
-                fontSize:
-                  '1.1rem',
-                marginBottom:
-                  '1rem'
-              }}
-            >
-              Post Track for{' '}
-              {selectedDate}
-            </h3>
-
-            <form
-              onSubmit={
-                handlePreview
-              }
-              style={{
-                display: 'flex',
-                gap: '1rem',
-                flexWrap:
-                  'wrap'
-              }}
-            >
-              <input
-                type="text"
-                placeholder="Paste Spotify Link here..."
-                value={
-                  spotifyUrl
-                }
-                onChange={(e) =>
-                  setSpotifyUrl(
-                    e.target.value
-                  )
-                }
-                style={{
-                  flex: 1,
-                  minWidth:
-                    '250px',
-                  padding:
-                    '0.8rem 1rem',
-                  borderRadius:
-                    '8px',
-                  border:
-                    '1px solid var(--border-color)',
-                  background:
-                    'var(--bg-secondary)',
-                  color:
-                    'var(--text-main)',
-                  fontSize:
-                    '1rem'
-                }}
-                required
-              />
-
-              <button
-                type="submit"
-                disabled={
-                  isPreviewing
-                }
-                style={{
-                  background:
-                    'var(--bg-secondary)',
-                  color:
-                    'var(--text-main)',
-                  border:
-                    '1px solid var(--border-color)',
-                  padding:
-                    '0 1.5rem',
-                  borderRadius:
-                    '8px',
-                  fontWeight:
-                    'bold',
-                  cursor:
-                    isPreviewing
-                      ? 'not-allowed'
-                      : 'pointer',
-                  opacity:
-                    isPreviewing
-                      ? 0.6
-                      : 1
-                }}
-              >
-                {isPreviewing
-                  ? 'Loading...'
-                  : 'Preview'}
-              </button>
-            </form>
-
-            {previewData && (
-              <div
-                style={{
-                  marginTop:
-                    '2rem',
-                  display:
-                    'flex',
-                  justifyContent:
-                    'space-between',
-                  alignItems:
-                    'center',
-                  gap: '1rem',
-                  flexWrap:
-                    'wrap',
-                  background:
-                    'var(--bg-primary)',
-                  padding:
-                    '1.5rem',
-                  borderRadius:
-                    '12px',
-                  border:
-                    '1px solid var(--accent-green)'
-                }}
-              >
-                <div
-                  style={{
-                    display:
-                      'flex',
-                    gap:
-                      '1.5rem',
-                    alignItems:
-                      'center'
-                  }}
-                >
-                  {previewData.cover_art_url && (
-                    <img
-                      src={
-                        previewData.cover_art_url
-                      }
-                      alt="Album artwork"
-                      style={{
-                        width:
-                          '80px',
-                        height:
-                          '80px',
-                        borderRadius:
-                          '8px',
-                        objectFit:
-                          'cover'
-                      }}
-                    />
-                  )}
-
-                  <div>
-                    <h3
-                      style={{
-                        margin: 0,
-                        fontSize:
-                          '1.2rem'
-                      }}
-                    >
-                      {
-                        previewData.title
-                      }
-                    </h3>
-
-                    <p
-                      style={{
-                        margin:
-                          '0.3rem 0 0 0',
-                        color:
-                          'var(--text-muted)'
-                      }}
-                    >
-                      {
-                        previewData.artist
-                      }
-                    </p>
-
-                    {previewData.album && (
-                      <p
-                        style={{
-                          margin:
-                            '0.25rem 0 0 0',
-                          color:
-                            'var(--text-muted)',
-                          fontSize:
-                            '0.8rem'
-                        }}
-                      >
-                        {
-                          previewData.album
-                        }
-                      </p>
-                    )}
+      {/* Logged-in submission */}
+      {currentUser && (
+        <section
+          style={{
+            background: 'var(--bg-card)',
+            padding: '1.5rem',
+            borderRadius: 'var(--border-radius-lg)',
+            border: '1px solid var(--border-color)'
+          }}
+        >
+          {mySong ? (
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem', flexWrap: 'wrap' }}>
+                <div>
+                  <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                    Your submission
                   </div>
+                  <h3 style={{ margin: '0.35rem 0 0' }}>{mySong.title}</h3>
+                  <p style={{ margin: '0.25rem 0', color: 'var(--text-muted)' }}>{mySong.artist}</p>
+                  {mySong.spotify_url && (
+                    <a href={mySong.spotify_url} target="_blank" rel="noreferrer" style={{ color: 'var(--accent-green)', fontSize: '0.85rem' }}>
+                      Open in Spotify
+                    </a>
+                  )}
                 </div>
-
                 <button
-                  onClick={
-                    handleDatabaseSubmit
-                  }
+                  onClick={() => startEditingSong(mySong)}
                   style={{
-                    background:
-                      'var(--accent-green)',
-                    color: '#000',
-                    border:
-                      'none',
-                    padding:
-                      '0.8rem 2rem',
-                    borderRadius:
-                      '8px',
-                    fontWeight:
-                      'bold',
-                    cursor:
-                      'pointer'
+                    background: 'transparent',
+                    color: 'var(--accent-green)',
+                    border: '1px solid var(--accent-green)',
+                    padding: '0.6rem 1rem',
+                    borderRadius: '8px',
+                    fontWeight: 'bold',
+                    cursor: 'pointer'
                   }}
                 >
-                  Submit for{' '}
-                  {selectedDate}
+                  Edit My Song
                 </button>
               </div>
-            )}
-          </>
-        )}
+            </div>
+          ) : (
+            <>
+              <div style={{ marginBottom: '0.8rem' }}>
+                <h3 style={{ margin: 0 }}>Submit a song for {selectedDate}</h3>
+                <p style={{ color: 'var(--text-muted)', margin: '0.3rem 0 0', fontSize: '0.9rem' }}>
+                  Paste a Spotify track link and we'll pull the song details automatically.
+                </p>
+              </div>
+              <form onSubmit={handlePreview} style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+                <input
+                  value={spotifyUrl}
+                  onChange={(event) => setSpotifyUrl(event.target.value)}
+                  placeholder="https://open.spotify.com/track/..."
+                  required
+                  style={{ flex: 1, minWidth: '260px', padding: '0.8rem 1rem', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-main)' }}
+                />
+                <button
+                  type="submit"
+                  disabled={isPreviewing}
+                  style={{ background: 'var(--bg-secondary)', color: 'var(--text-main)', border: '1px solid var(--border-color)', padding: '0 1.2rem', borderRadius: '8px', fontWeight: 'bold', cursor: isPreviewing ? 'not-allowed' : 'pointer' }}
+                >
+                  {isPreviewing ? 'Loading…' : 'Preview'}
+                </button>
+              </form>
 
-        {submitStatus && (
-          <div
-            style={{
-              marginTop:
-                '1.5rem',
-              padding:
-                '1rem',
-              borderRadius:
-                '8px',
-              textAlign:
-                'center',
-              fontWeight:
-                'bold',
-              background:
-                submitStatus.includes(
-                  'Success'
-                ) ||
-                submitStatus.includes(
-                  'successfully'
-                )
-                  ? 'rgba(46, 213, 115, 0.1)'
-                  : 'rgba(255, 71, 87, 0.1)',
-              color:
-                submitStatus.includes(
-                  'Success'
-                ) ||
-                submitStatus.includes(
-                  'successfully'
-                )
-                  ? '#2ed573'
-                  : '#ff4757'
-            }}
-          >
-            {submitStatus}
-          </div>
-        )}
-      </div>
+              {previewData && (
+                <div style={{ marginTop: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', padding: '1rem', borderRadius: '10px', background: 'var(--bg-primary)', border: '1px solid rgba(29,185,84,0.35)', flexWrap: 'wrap' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                    {previewData.cover_art_url && (
+                      <img src={previewData.cover_art_url} alt="Album artwork" style={{ width: 72, height: 72, borderRadius: 8, objectFit: 'cover' }} />
+                    )}
+                    <div>
+                      <strong style={{ fontSize: '1.05rem' }}>{previewData.title}</strong>
+                      <div style={{ color: 'var(--text-muted)', marginTop: '0.2rem' }}>{previewData.artist}</div>
+                      {previewData.album && <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginTop: '0.15rem' }}>{previewData.album}</div>}
+                    </div>
+                  </div>
+                  <button
+                    onClick={handleDatabaseSubmit}
+                    style={{ background: 'var(--accent-green)', color: '#000', border: 'none', padding: '0.7rem 1.2rem', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer' }}
+                  >
+                    Submit for {selectedDate}
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+        </section>
+      )}
 
-      {/* ==================================================== */}
-      {/* EDIT PANEL */}
-      {/* ==================================================== */}
-
-      {editingSong && (
-        <div
-          style={{
-            background:
-              'var(--bg-card)',
-            padding: '2rem',
-            borderRadius:
-              'var(--border-radius-lg)',
-            border:
-              '1px solid var(--accent-green)'
-          }}
-        >
-          <div
-            style={{
-              display:
-                'flex',
-              justifyContent:
-                'space-between',
-              alignItems:
-                'center',
-              gap: '1rem',
-              marginBottom:
-                '1.5rem'
-            }}
-          >
+      {/* Edit panel */}
+      {currentUser && editingSong && (
+        <section style={{ background: 'var(--bg-card)', padding: '1.5rem', borderRadius: 'var(--border-radius-lg)', border: '1px solid rgba(29,185,84,0.5)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', marginBottom: '1rem' }}>
             <div>
-              <h3
-                style={{
-                  fontSize:
-                    '1.1rem',
-                  margin: 0
-                }}
-              >
-                Edit Your Song
-              </h3>
-
-              <p
-                style={{
-                  margin:
-                    '0.4rem 0 0 0',
-                  color:
-                    'var(--text-muted)',
-                  fontSize:
-                    '0.85rem'
-                }}
-              >
-                Replace it with a
-                different Spotify
-                track.
+              <h3 style={{ margin: 0 }}>Edit your song</h3>
+              <p style={{ color: 'var(--text-muted)', margin: '0.25rem 0 0', fontSize: '0.9rem' }}>
+                Choose a new Spotify track. Changing the track resets the old track's votes.
               </p>
             </div>
-
-            <button
-              onClick={
-                cancelEditingSong
-              }
-              style={{
-                background:
-                  'transparent',
-                color:
-                  'var(--text-muted)',
-                border:
-                  '1px solid var(--border-color)',
-                padding:
-                  '0.4rem 0.8rem',
-                borderRadius:
-                  '6px',
-                cursor:
-                  'pointer'
-              }}
-            >
+            <button onClick={cancelEditingSong} style={{ background: 'transparent', color: 'var(--text-muted)', border: '1px solid var(--border-color)', padding: '0.45rem 0.8rem', borderRadius: '7px', cursor: 'pointer' }}>
               Cancel
             </button>
           </div>
 
-          <form
-            onSubmit={
-              handleEditPreview
-            }
-            style={{
-              display:
-                'flex',
-              gap: '1rem',
-              flexWrap:
-                'wrap'
-            }}
-          >
+          <form onSubmit={handleEditPreview} style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
             <input
-              type="text"
-              placeholder="Paste new Spotify link..."
-              value={
-                editSpotifyUrl
-              }
-              onChange={(e) =>
-                setEditSpotifyUrl(
-                  e.target.value
-                )
-              }
-              style={{
-                flex: 1,
-                minWidth:
-                  '250px',
-                padding:
-                  '0.8rem 1rem',
-                borderRadius:
-                  '8px',
-                border:
-                  '1px solid var(--border-color)',
-                background:
-                  'var(--bg-secondary)',
-                color:
-                  'var(--text-main)',
-                fontSize:
-                  '1rem'
-              }}
+              value={editSpotifyUrl}
+              onChange={(event) => setEditSpotifyUrl(event.target.value)}
               required
+              placeholder="Paste the new Spotify track link"
+              style={{ flex: 1, minWidth: '260px', padding: '0.8rem 1rem', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-main)' }}
             />
-
-            <button
-              type="submit"
-              disabled={
-                isPreviewingEdit
-              }
-              style={{
-                background:
-                  'var(--bg-secondary)',
-                color:
-                  'var(--text-main)',
-                border:
-                  '1px solid var(--border-color)',
-                padding:
-                  '0 1.5rem',
-                borderRadius:
-                  '8px',
-                fontWeight:
-                  'bold',
-                cursor:
-                  isPreviewingEdit
-                    ? 'not-allowed'
-                    : 'pointer',
-                opacity:
-                  isPreviewingEdit
-                    ? 0.6
-                    : 1
-              }}
-            >
-              {isPreviewingEdit
-                ? 'Loading...'
-                : 'Preview New Song'}
+            <button type="submit" disabled={isPreviewingEdit} style={{ background: 'var(--bg-secondary)', color: 'var(--text-main)', border: '1px solid var(--border-color)', padding: '0 1.1rem', borderRadius: '8px', fontWeight: 'bold', cursor: isPreviewingEdit ? 'not-allowed' : 'pointer' }}>
+              {isPreviewingEdit ? 'Loading…' : 'Preview New Song'}
             </button>
           </form>
 
           {editPreviewData && (
-            <div
-              style={{
-                marginTop:
-                  '1.5rem',
-                padding:
-                  '1.5rem',
-                background:
-                  'var(--bg-primary)',
-                borderRadius:
-                  '12px'
-              }}
-            >
-              <div
-                style={{
-                  display:
-                    'flex',
-                  justifyContent:
-                    'space-between',
-                  alignItems:
-                    'center',
-                  gap: '1rem',
-                  flexWrap:
-                    'wrap'
-                }}
-              >
-                <div
-                  style={{
-                    display:
-                      'flex',
-                    gap:
-                      '1rem',
-                    alignItems:
-                      'center'
-                  }}
-                >
-                  {editPreviewData.cover_art_url && (
-                    <img
-                      src={
-                        editPreviewData.cover_art_url
-                      }
-                      alt="New album artwork"
-                      style={{
-                        width:
-                          '80px',
-                        height:
-                          '80px',
-                        borderRadius:
-                          '8px',
-                        objectFit:
-                          'cover'
-                      }}
-                    />
-                  )}
-
-                  <div>
-                    <h3
-                      style={{
-                        margin: 0
-                      }}
-                    >
-                      {
-                        editPreviewData.title
-                      }
-                    </h3>
-
-                    <p
-                      style={{
-                        margin:
-                          '0.3rem 0 0 0',
-                        color:
-                          'var(--text-muted)'
-                      }}
-                    >
-                      {
-                        editPreviewData.artist
-                      }
-                    </p>
-
-                    {editPreviewData.album && (
-                      <p
-                        style={{
-                          margin:
-                            '0.25rem 0 0 0',
-                          color:
-                            'var(--text-muted)',
-                          fontSize:
-                            '0.8rem'
-                        }}
-                      >
-                        {
-                          editPreviewData.album
-                        }
-                      </p>
-                    )}
-                  </div>
+            <div style={{ marginTop: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', padding: '1rem', background: 'var(--bg-primary)', borderRadius: '10px', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                {editPreviewData.cover_art_url && (
+                  <img src={editPreviewData.cover_art_url} alt="New album artwork" style={{ width: 72, height: 72, borderRadius: 8, objectFit: 'cover' }} />
+                )}
+                <div>
+                  <strong>{editPreviewData.title}</strong>
+                  <div style={{ color: 'var(--text-muted)', marginTop: '0.2rem' }}>{editPreviewData.artist}</div>
+                  {editPreviewData.album && <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginTop: '0.15rem' }}>{editPreviewData.album}</div>}
                 </div>
-
-                <button
-                  onClick={
-                    handleUpdateSong
-                  }
-                  disabled={
-                    isUpdatingSong
-                  }
-                  style={{
-                    background:
-                      'var(--accent-green)',
-                    color:
-                      '#000',
-                    border:
-                      'none',
-                    padding:
-                      '0.8rem 1.5rem',
-                    borderRadius:
-                      '8px',
-                    fontWeight:
-                      'bold',
-                    cursor:
-                      isUpdatingSong
-                        ? 'not-allowed'
-                        : 'pointer',
-                    opacity:
-                      isUpdatingSong
-                        ? 0.6
-                        : 1
-                  }}
-                >
-                  {isUpdatingSong
-                    ? 'Saving...'
-                    : 'Save Changes'}
-                </button>
               </div>
+              <button onClick={handleUpdateSong} disabled={isUpdatingSong} style={{ background: 'var(--accent-green)', color: '#000', border: 'none', padding: '0.7rem 1.2rem', borderRadius: '8px', fontWeight: 'bold', cursor: isUpdatingSong ? 'not-allowed' : 'pointer' }}>
+                {isUpdatingSong ? 'Saving…' : 'Save Changes'}
+              </button>
             </div>
           )}
+        </section>
+      )}
+
+      {submitStatus && (
+        <div style={{ padding: '0.8rem 1rem', borderRadius: '9px', background: submitStatus.toLowerCase().includes('success') || submitStatus.toLowerCase().includes('updated') ? 'rgba(46,213,115,0.1)' : 'rgba(255,71,87,0.1)', color: submitStatus.toLowerCase().includes('success') || submitStatus.toLowerCase().includes('updated') ? '#2ed573' : '#ff4757', textAlign: 'center', fontWeight: 'bold' }}>
+          {submitStatus}
         </div>
       )}
 
-      {/* ==================================================== */}
-      {/* VOTING PANEL */}
-      {/* ==================================================== */}
-
-      <div
-        style={{
-          background:
-            'var(--bg-card)',
-          padding: '2rem',
-          borderRadius:
-            'var(--border-radius-lg)',
-          border:
-            '1px solid var(--border-color)'
-        }}
-      >
-        <div
-          style={{
-            display:
-              'flex',
-            justifyContent:
-              'space-between',
-            alignItems:
-              'center',
-            marginBottom:
-              '1rem',
-            flexWrap:
-              'wrap',
-            gap:
-              '1rem'
-          }}
-        >
+      {/* Results / voting */}
+      <section style={{ background: 'var(--bg-card)', padding: '1.5rem', borderRadius: 'var(--border-radius-lg)', border: '1px solid var(--border-color)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem', marginBottom: '1.25rem', flexWrap: 'wrap' }}>
           <div>
-            <h3
-              style={{
-                fontSize:
-                  '1.1rem',
-                margin: 0
-              }}
-            >
-              Votes & Tracks for{' '}
-              {selectedDate}{' '}
-              (
-              {targetSongs.length}/
-              {totalUserCount}{' '}
-              Songs Posted)
-            </h3>
-
-            <p
-              style={{
-                fontSize:
-                  '0.85rem',
-                color:
-                  'var(--text-muted)',
-                margin:
-                  '0.2rem 0 0 0'
-              }}
-            >
-              {!allSongsPosted
-                ? `Waiting for all ${totalUserCount} managers to post their songs before voting can unlock.`
-                : !allSongsHaveScores
-                  ? 'Assign a unique score (1-5) to every track to unlock submission.'
-                  : 'All songs scored. Ready to submit!'}
+            <h3 style={{ margin: 0 }}>Daily Results</h3>
+            <p style={{ color: 'var(--text-muted)', margin: '0.3rem 0 0', fontSize: '0.9rem' }}>
+              {targetSongs.length}/{totalUserCount} songs posted • public results
             </p>
           </div>
 
-          <div
-            style={{
-              display:
-                'flex',
-              gap:
-                '0.8rem'
-            }}
-          >
-            {targetSongs.length >
-              0 && (
-              <button
-                onClick={
-                  handleClearAllVotesLocally
-                }
-                style={{
-                  background:
-                    'transparent',
-                  color:
-                    '#ff4757',
-                  border:
-                    '1px solid #ff4757',
-                  padding:
-                    '0.5rem 1rem',
-                  borderRadius:
-                    '8px',
-                  fontWeight:
-                    'bold',
-                  cursor:
-                    'pointer',
-                  fontSize:
-                    '0.85rem'
-                }}
-              >
+          {currentUser && targetSongs.length > 0 && (
+            <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
+              <button onClick={handleClearAllVotesLocally} style={{ background: 'transparent', color: '#ff4757', border: '1px solid #ff4757', padding: '0.5rem 0.8rem', borderRadius: '7px', cursor: 'pointer', fontSize: '0.85rem' }}>
                 Clear Selection
               </button>
-            )}
-
-            <button
-              onClick={
-                handleSubmitBatchVotes
-              }
-              disabled={
-                !canSubmit ||
-                isSubmittingVotes
-              }
-              style={{
-                background:
-                  canSubmit
-                    ? 'var(--accent-green)'
-                    : 'var(--bg-secondary)',
-                color:
-                  canSubmit
-                    ? '#000'
-                    : 'var(--text-muted)',
-                border:
-                  '1px solid var(--border-color)',
-                padding:
-                  '0.5rem 1.5rem',
-                borderRadius:
-                  '8px',
-                fontWeight:
-                  'bold',
-                cursor:
-                  canSubmit &&
-                  !isSubmittingVotes
-                    ? 'pointer'
-                    : 'not-allowed',
-                opacity:
-                  canSubmit
-                    ? 1
-                    : 0.6,
-                fontSize:
-                  '0.9rem',
-                boxShadow:
-                  canSubmit
-                    ? '0 0 12px rgba(29, 185, 84, 0.3)'
-                    : 'none'
-              }}
-            >
-              {isSubmittingVotes
-                ? 'Saving...'
-                : hasExistingSaves &&
-                    !hasChanges
-                  ? 'Submitted'
-                  : hasExistingSaves
-                    ? 'Re-submit'
-                    : 'Submit Votes'}
-            </button>
-          </div>
+              <button
+                onClick={handleSubmitBatchVotes}
+                disabled={!canSubmitVotes || isSubmittingVotes}
+                style={{ background: canSubmitVotes ? 'var(--accent-green)' : 'var(--bg-secondary)', color: canSubmitVotes ? '#000' : 'var(--text-muted)', border: '1px solid var(--border-color)', padding: '0.5rem 1rem', borderRadius: '7px', fontWeight: 'bold', cursor: canSubmitVotes && !isSubmittingVotes ? 'pointer' : 'not-allowed' }}
+              >
+                {isSubmittingVotes ? 'Saving…' : hasExistingSaves && !hasChanges ? 'Submitted' : hasExistingSaves ? 'Re-submit Votes' : 'Submit Votes'}
+              </button>
+            </div>
+          )}
         </div>
 
         {voteError && (
-          <div
-            style={{
-              marginBottom:
-                '1.5rem',
-              padding:
-                '1rem',
-              borderRadius:
-                '8px',
-              textAlign:
-                'center',
-              fontWeight:
-                'bold',
-              background:
-                'rgba(255, 71, 87, 0.1)',
-              color:
-                '#ff4757'
-            }}
-          >
+          <div style={{ marginBottom: '1rem', padding: '0.8rem 1rem', borderRadius: '8px', background: 'rgba(255,71,87,0.1)', color: '#ff4757' }}>
             {voteError}
           </div>
         )}
 
         {isLoadingSongs ? (
-          <p
-            style={{
-              color:
-                'var(--text-muted)',
-              textAlign:
-                'center'
-            }}
-          >
-            Loading tracks...
-          </p>
-        ) : targetSongs.length ===
-          0 ? (
-          <p
-            style={{
-              color:
-                'var(--text-muted)',
-              textAlign:
-                'center',
-              padding:
-                '1rem'
-            }}
-          >
-            No tracks found for this
-            date.
-          </p>
+          <div style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem' }}>Loading daily results…</div>
+        ) : targetSongs.length === 0 ? (
+          <div style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem' }}>
+            No songs have been posted for {selectedDate} yet.
+          </div>
         ) : (
-          <div
-            style={{
-              display:
-                'flex',
-              flexDirection:
-                'column',
-              gap:
-                '1.5rem'
-            }}
-          >
-            {targetSongs.map(
-              (song) => {
-                const submitterColor =
-                  getUserColor(
-                    song.submittedBy
-                  );
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.9rem' }}>
+            {targetSongs.map((song) => {
+              const submitterColor = getUserColor(song.submittedBy);
+              const isMySong = currentUser && Number(song.submitter_id) === Number(currentUser.id);
+              const averageLabel = song.average == null ? 'No votes yet' : `Average ${song.average.toFixed(2)}`;
 
-                const isMySong =
-                  Number(
-                    song.submitter_id
-                  ) ===
-                  Number(
-                    currentUser.id
-                  );
-
-                return (
-                  <div
-                    key={
-                      song.id
-                    }
-                    style={{
-                      display:
-                        'flex',
-                      justifyContent:
-                        'space-between',
-                      alignItems:
-                        'center',
-                      borderBottom:
-                        '1px solid var(--border-color)',
-                      paddingBottom:
-                        '1.5rem',
-                      gap:
-                        '1rem',
-                      flexWrap:
-                        'wrap'
-                    }}
-                  >
-                    <div
-                      style={{
-                        flex: 1,
-                        minWidth:
-                          '240px'
-                      }}
-                    >
-                      <h3
-                        style={{
-                          fontSize:
-                            '1.15rem',
-                          margin: 0,
-                          color:
-                            submitterColor
-                        }}
-                      >
-                        {song.title}
-                      </h3>
-
-                      <p
-                        style={{
-                          fontSize:
-                            '0.9rem',
-                          color:
-                            'var(--text-muted)',
-                          margin:
-                            '0.3rem 0 0 0'
-                        }}
-                      >
-                        {song.artist}
-
-                        <span
-                          style={{
-                            opacity:
-                              0.8,
-                            marginLeft:
-                              '0.5rem'
-                          }}
-                        >
-                          • Submitted by{' '}
-                          <strong
-                            style={{
-                              color:
-                                submitterColor
-                            }}
-                          >
-                            {
-                              song.submittedBy
-                            }
-                          </strong>
-                        </span>
-                      </p>
-
-                      <div
-                        style={{
-                          display:
-                            'flex',
-                          alignItems:
-                            'center',
-                          gap:
-                            '0.8rem',
-                          marginTop:
-                            '0.6rem',
-                          flexWrap:
-                            'wrap'
-                        }}
-                      >
+              return (
+                <article
+                  key={song.id}
+                  style={{
+                    background: 'var(--bg-primary)',
+                    border: '1px solid var(--border-color)',
+                    borderRadius: '12px',
+                    padding: '1rem',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '0.9rem'
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
+                    <div style={{ minWidth: 0 }}>
+                      <h4 style={{ margin: 0, fontSize: '1.08rem', color: submitterColor }}>{song.title}</h4>
+                      <div style={{ color: 'var(--text-muted)', marginTop: '0.25rem', fontSize: '0.9rem' }}>
+                        {song.artist} <span style={{ opacity: 0.75 }}>• Submitted by </span>
+                        <strong style={{ color: submitterColor }}>{song.submittedBy}</strong>
+                      </div>
+                      <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.45rem', alignItems: 'center', flexWrap: 'wrap' }}>
                         {song.spotify_url && (
-                          <a
-                            href={
-                              song.spotify_url
-                            }
-                            target="_blank"
-                            rel="noreferrer"
-                            style={{
-                              color:
-                                'var(--accent-green)',
-                              fontSize:
-                                '0.8rem',
-                              textDecoration:
-                                'none'
-                            }}
-                          >
-                            Open in Spotify
+                          <a href={song.spotify_url} target="_blank" rel="noreferrer" style={{ color: 'var(--accent-green)', fontSize: '0.8rem', textDecoration: 'none' }}>
+                            Open in Spotify ↗
                           </a>
                         )}
-
+                        <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+                          {averageLabel}{song.vote_count ? ` • ${song.vote_count} vote${song.vote_count === 1 ? '' : 's'}` : ''}
+                        </span>
                         {isMySong && (
-                          <button
-                            onClick={() =>
-                              startEditingSong(
-                                song
-                              )
-                            }
-                            style={{
-                              background:
-                                'transparent',
-                              color:
-                                'var(--accent-green)',
-                              border:
-                                '1px solid var(--accent-green)',
-                              padding:
-                                '0.3rem 0.7rem',
-                              borderRadius:
-                                '6px',
-                              fontWeight:
-                                'bold',
-                              cursor:
-                                'pointer',
-                              fontSize:
-                                '0.75rem'
-                            }}
-                          >
-                            Edit My Song
+                          <button onClick={() => startEditingSong(song)} style={{ background: 'transparent', color: 'var(--accent-green)', border: '1px solid var(--accent-green)', padding: '0.25rem 0.6rem', borderRadius: '6px', fontSize: '0.75rem', cursor: 'pointer' }}>
+                            Edit
                           </button>
                         )}
                       </div>
                     </div>
 
-                    <div
-                      style={{
-                        display:
-                          'flex',
-                        gap:
-                          '0.5rem'
-                      }}
-                    >
-                      {[1, 2, 3, 4, 5].map(
-                        (score) => {
-                          const isSelected =
-                            myVotes[
-                              song.id
-                            ] ===
-                            score;
-
-                          const baseColor =
-                            getScoreColor(
-                              score
-                            );
-
-                          return (
-                            <button
-                              key={
-                                score
-                              }
-                              onClick={() =>
-                                handleScoreClick(
-                                  song.id,
-                                  score
-                                )
-                              }
-                              style={{
-                                background:
-                                  isSelected
-                                    ? baseColor
-                                    : 'transparent',
-                                color:
-                                  isSelected
-                                    ? '#000'
-                                    : baseColor,
-                                border:
-                                  `2px solid ${
-                                    isSelected
-                                      ? baseColor
-                                      : `${baseColor}40`
-                                  }`,
-                                padding:
-                                  '0.5rem 1rem',
-                                borderRadius:
-                                  '8px',
-                                fontWeight:
-                                  'bold',
-                                fontSize:
-                                  '1.1rem',
-                                cursor:
-                                  'pointer',
-                                transition:
-                                  'all 0.15s ease-in-out',
-                                boxShadow:
-                                  isSelected
-                                    ? `0 0 12px ${baseColor}60`
-                                    : 'none'
-                              }}
-                            >
-                              {score}
-                            </button>
-                          );
-                        }
-                      )}
+                    <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', opacity: currentUser ? 1 : 0.7 }}>
+                      {[1, 2, 3, 4, 5].map((score) => {
+                        const selected = currentUser && myVotes[song.id] === score;
+                        const baseColor = getScoreColor(score);
+                        return (
+                          <button
+                            key={score}
+                            onClick={() => handleScoreClick(song.id, score)}
+                            disabled={!currentUser}
+                            title={currentUser ? `Give ${song.title} a ${score}` : 'Log in to vote'}
+                            style={{
+                              width: 38,
+                              height: 38,
+                              borderRadius: '9px',
+                              border: `2px solid ${selected ? baseColor : `${baseColor}55`}`,
+                              background: selected ? baseColor : 'transparent',
+                              color: selected ? '#000' : baseColor,
+                              fontWeight: 'bold',
+                              cursor: currentUser ? 'pointer' : 'not-allowed',
+                              transition: 'all 0.15s ease'
+                            }}
+                          >
+                            {score}
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
-                );
-              }
-            )}
+
+                  {/* Everyone can see everyone's votes */}
+                  <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '0.8rem' }}>
+                    <div style={{ fontSize: '0.76rem', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', marginBottom: '0.55rem' }}>
+                      Votes
+                    </div>
+                    {song.votes?.length ? (
+                      <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                        {song.votes.map((vote) => (
+                          <div key={`${song.id}-${vote.username}`} style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', padding: '0.4rem 0.65rem', borderRadius: '999px', background: 'var(--bg-card)', border: '1px solid var(--border-color)' }}>
+                            <span style={{ fontSize: '0.82rem' }}>{vote.username}</span>
+                            <strong style={{ color: getScoreColor(vote.score) }}>{vote.score}</strong>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>No votes have been submitted yet.</span>
+                    )}
+                  </div>
+                </article>
+              );
+            })}
           </div>
         )}
-      </div>
+      </section>
     </div>
   );
 }
