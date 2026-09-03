@@ -102,7 +102,7 @@ export default function App() {
               margin: 0
             }}
           >
-            MPE • Moosic
+            MPE Moosic
           </h1>
 
           <div
