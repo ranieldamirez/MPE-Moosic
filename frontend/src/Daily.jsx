@@ -21,15 +21,14 @@ const getScoreColor = (score) => {
 
 export default function Daily({
   currentUser,
-  onGoToLogin,
-  onLogout
+  onGoToLogin
 }) {
   const getTodayString = () => {
     const today = new Date();
 
     return new Date(
       today.getTime() -
-        today.getTimezoneOffset() * 60000
+        (today.getTimezoneOffset() * 60000)
     )
       .toISOString()
       .split('T')[0];
@@ -68,22 +67,43 @@ export default function Daily({
   const [isSubmittingVotes, setIsSubmittingVotes] =
     useState(false);
 
-  /*
-   * Handle an expired/invalid token.
-   */
-  const handleUnauthorized = useCallback(() => {
-    if (onLogout) {
-      onLogout();
-    } else {
-      localStorage.removeItem('moosic_token');
-      localStorage.removeItem('moosic_user');
-      onGoToLogin();
-    }
-  }, [onLogout, onGoToLogin]);
+  // ==========================================================
+  // EDIT STATE
+  // ==========================================================
 
-  /*
-   * Load songs, current user's votes, and user count.
-   */
+  const [editingSong, setEditingSong] =
+    useState(null);
+
+  const [editSpotifyUrl, setEditSpotifyUrl] =
+    useState('');
+
+  const [editPreviewData, setEditPreviewData] =
+    useState(null);
+
+  const [isUpdatingSong, setIsUpdatingSong] =
+    useState(false);
+
+  const [isPreviewing, setIsPreviewing] =
+    useState(false);
+
+  const [isPreviewingEdit, setIsPreviewingEdit] =
+    useState(false);
+
+  // ==========================================================
+  // AUTH
+  // ==========================================================
+
+  const handleUnauthorized = useCallback(() => {
+    localStorage.removeItem('moosic_token');
+    localStorage.removeItem('moosic_user');
+
+    onGoToLogin();
+  }, [onGoToLogin]);
+
+  // ==========================================================
+  // LOAD DATA
+  // ==========================================================
+
   const fetchDataForDate = useCallback(async () => {
     if (!selectedDate || !currentUser) {
       return;
@@ -114,7 +134,8 @@ export default function Daily({
           `${import.meta.env.VITE_API_URL}/api/votes/me/${selectedDate}`,
           {
             headers: {
-              Authorization: `Bearer ${token}`
+              Authorization:
+                `Bearer ${token}`
             }
           }
         ),
@@ -124,19 +145,16 @@ export default function Daily({
         )
       ]);
 
-      /*
-       * If our auth token is no longer valid,
-       * log the user out of the application.
-       */
       if (votesRes.status === 401) {
         handleUnauthorized();
         return;
       }
 
       if (songsRes.ok) {
-        setTargetSongs(
-          await songsRes.json()
-        );
+        const songs =
+          await songsRes.json();
+
+        setTargetSongs(songs);
       } else {
         setTargetSongs([]);
       }
@@ -157,7 +175,9 @@ export default function Daily({
           await statsRes.json();
 
         if (
-          Array.isArray(statsData.usernames)
+          Array.isArray(
+            statsData.usernames
+          )
         ) {
           setTotalUserCount(
             statsData.usernames.length
@@ -174,6 +194,7 @@ export default function Daily({
       setVoteError(
         'Failed to load the voting data.'
       );
+
     } finally {
       setIsLoadingSongs(false);
     }
@@ -193,12 +214,10 @@ export default function Daily({
     fetchDataForDate
   ]);
 
-  /*
-   * LOGGED OUT VIEW
-   *
-   * Nobody can vote or submit unless there
-   * is an authenticated user.
-   */
+  // ==========================================================
+  // LOGGED OUT
+  // ==========================================================
+
   if (!currentUser) {
     return (
       <div
@@ -237,7 +256,8 @@ export default function Daily({
               'var(--accent-green)',
             color: '#000',
             border: 'none',
-            padding: '0.8rem 2rem',
+            padding:
+              '0.8rem 2rem',
             borderRadius: '8px',
             fontWeight: 'bold',
             cursor: 'pointer'
@@ -249,17 +269,26 @@ export default function Daily({
     );
   }
 
-  /*
-   * Spotify preview
-   */
+  // ==========================================================
+  // CURRENT USER'S SONG
+  // ==========================================================
+
+  const mySong = targetSongs.find(
+    (song) =>
+      Number(song.submitter_id) ===
+      Number(currentUser.id)
+  );
+
+  // ==========================================================
+  // SPOTIFY PREVIEW FOR NEW SUBMISSION
+  // ==========================================================
+
   const handlePreview = async (e) => {
     e.preventDefault();
 
     if (!spotifyUrl) {
       return;
     }
-
-    setSubmitStatus(null);
 
     const token =
       localStorage.getItem('moosic_token');
@@ -268,6 +297,9 @@ export default function Daily({
       handleUnauthorized();
       return;
     }
+
+    setSubmitStatus(null);
+    setIsPreviewing(true);
 
     try {
       const response = await fetch(
@@ -291,35 +323,34 @@ export default function Daily({
         return;
       }
 
-      const data = await response.json();
+      const data =
+        await response.json();
 
       if (response.ok) {
         setPreviewData(data);
       } else {
         setSubmitStatus(
           data.detail ||
-            'Failed to fetch metadata.'
+          'Failed to fetch metadata.'
         );
       }
+
     } catch (err) {
-      console.error(
-        'Metadata error:',
-        err
-      );
+      console.error(err);
 
       setSubmitStatus(
-        'Error connecting to server.'
+        'Error connecting to Spotify.'
       );
+
+    } finally {
+      setIsPreviewing(false);
     }
   };
 
-  /*
-   * Actually save the song.
-   *
-   * Notice:
-   * We DO NOT send submitter_id.
-   * The backend gets the user from the JWT.
-   */
+  // ==========================================================
+  // CREATE NEW SONG
+  // ==========================================================
+
   const handleDatabaseSubmit = async () => {
     if (!previewData) {
       return;
@@ -347,9 +378,21 @@ export default function Daily({
               `Bearer ${token}`
           },
           body: JSON.stringify({
-            title: previewData.title,
-            artist: previewData.artist,
-            submission_date: selectedDate
+            title:
+              previewData.title,
+            artist:
+              previewData.artist,
+
+            spotify_url:
+              previewData.spotify_url ||
+              spotifyUrl,
+
+            spotify_track_id:
+              previewData.spotify_track_id ||
+              null,
+
+            submission_date:
+              selectedDate
           })
         }
       );
@@ -359,29 +402,28 @@ export default function Daily({
         return;
       }
 
-      const data = await response.json();
+      const data =
+        await response.json();
 
       if (response.ok) {
         setSubmitStatus(
-          `Success! Track added for ${selectedDate}.`
+          `Success! "${data.title}" added for ${selectedDate}.`
         );
 
         setSpotifyUrl('');
         setPreviewData(null);
 
         await fetchDataForDate();
+
       } else {
         setSubmitStatus(
           data.detail ||
-            'Error saving track. Please try again.'
+          'Error saving track.'
         );
       }
 
     } catch (err) {
-      console.error(
-        'Song submission error:',
-        err
-      );
+      console.error(err);
 
       setSubmitStatus(
         'Error saving track.'
@@ -389,9 +431,206 @@ export default function Daily({
     }
   };
 
-  /*
-   * Local vote selection
-   */
+  // ==========================================================
+  // BEGIN EDITING
+  // ==========================================================
+
+  const startEditingSong = (song) => {
+    setEditingSong(song);
+
+    setEditSpotifyUrl(
+      song.spotify_url || ''
+    );
+
+    setEditPreviewData({
+      title: song.title,
+      artist: song.artist,
+      cover_art_url: null,
+      spotify_url:
+        song.spotify_url || '',
+      spotify_track_id:
+        song.spotify_track_id || null
+    });
+
+    setSubmitStatus(null);
+  };
+
+  const cancelEditingSong = () => {
+    setEditingSong(null);
+    setEditSpotifyUrl('');
+    setEditPreviewData(null);
+    setSubmitStatus(null);
+  };
+
+  // ==========================================================
+  // PREVIEW EDITED SPOTIFY TRACK
+  // ==========================================================
+
+  const handleEditPreview = async (e) => {
+    e.preventDefault();
+
+    if (!editSpotifyUrl) {
+      return;
+    }
+
+    const token =
+      localStorage.getItem('moosic_token');
+
+    if (!token) {
+      handleUnauthorized();
+      return;
+    }
+
+    setSubmitStatus(null);
+    setIsPreviewingEdit(true);
+
+    try {
+      const response = await fetch(
+        `${import.meta.env.VITE_API_URL}/api/songs/fetch-metadata`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type':
+              'application/json',
+            Authorization:
+              `Bearer ${token}`
+          },
+          body: JSON.stringify({
+            url: editSpotifyUrl
+          })
+        }
+      );
+
+      if (response.status === 401) {
+        handleUnauthorized();
+        return;
+      }
+
+      const data =
+        await response.json();
+
+      if (response.ok) {
+        setEditPreviewData(data);
+      } else {
+        setSubmitStatus(
+          data.detail ||
+          'Failed to fetch metadata.'
+        );
+      }
+
+    } catch (err) {
+      console.error(err);
+
+      setSubmitStatus(
+        'Error connecting to Spotify.'
+      );
+
+    } finally {
+      setIsPreviewingEdit(false);
+    }
+  };
+
+  // ==========================================================
+  // SAVE EDIT
+  // ==========================================================
+
+  const handleUpdateSong = async () => {
+    if (
+      !editingSong ||
+      !editPreviewData
+    ) {
+      return;
+    }
+
+    const token =
+      localStorage.getItem('moosic_token');
+
+    if (!token) {
+      handleUnauthorized();
+      return;
+    }
+
+    setIsUpdatingSong(true);
+    setSubmitStatus(null);
+
+    try {
+      const response = await fetch(
+        `${import.meta.env.VITE_API_URL}/api/songs/${editingSong.id}`,
+        {
+          method: 'PUT',
+          headers: {
+            'Content-Type':
+              'application/json',
+            Authorization:
+              `Bearer ${token}`
+          },
+          body: JSON.stringify({
+            title:
+              editPreviewData.title,
+
+            artist:
+              editPreviewData.artist,
+
+            spotify_url:
+              editPreviewData.spotify_url ||
+              editSpotifyUrl,
+
+            spotify_track_id:
+              editPreviewData.spotify_track_id ||
+              null
+          })
+        }
+      );
+
+      if (response.status === 401) {
+        handleUnauthorized();
+        return;
+      }
+
+      const data =
+        await response.json();
+
+      if (!response.ok) {
+        setSubmitStatus(
+          data.detail ||
+          'Failed to update song.'
+        );
+
+        return;
+      }
+
+      if (data.votes_reset) {
+        setSubmitStatus(
+          'Song updated. Votes for the old song were reset.'
+        );
+      } else {
+        setSubmitStatus(
+          'Song updated successfully!'
+        );
+      }
+
+      setEditingSong(null);
+      setEditSpotifyUrl('');
+      setEditPreviewData(null);
+
+      await fetchDataForDate();
+
+    } catch (err) {
+      console.error(err);
+
+      setSubmitStatus(
+        'Error updating song.'
+      );
+
+    } finally {
+      setIsUpdatingSong(false);
+    }
+  };
+
+  // ==========================================================
+  // VOTING
+  // ==========================================================
+
   const handleScoreClick = (
     songId,
     score
@@ -402,12 +641,9 @@ export default function Daily({
       const currentAssignedScore =
         prev[songId];
 
-      /*
-       * Clicking the currently selected
-       * score removes it.
-       */
       if (
-        currentAssignedScore === score
+        currentAssignedScore ===
+        score
       ) {
         const updated = {
           ...prev
@@ -418,15 +654,12 @@ export default function Daily({
         return updated;
       }
 
-      /*
-       * A score can only be assigned once
-       * per day.
-       */
       const isScoreTakenElsewhere =
         Object.entries(prev).some(
-          ([sId, sScore]) =>
-            Number(sId) !== Number(songId) &&
-            sScore === score
+          ([existingSongId, existingScore]) =>
+            Number(existingSongId) !==
+              Number(songId) &&
+            existingScore === score
         );
 
       if (isScoreTakenElsewhere) {
@@ -444,14 +677,12 @@ export default function Daily({
     });
   };
 
-  /*
-   * Validation
-   */
   const allSongsHaveScores =
     targetSongs.length > 0 &&
     targetSongs.every(
       (song) =>
-        myVotes[song.id] !== undefined
+        myVotes[song.id] !==
+        undefined
     );
 
   const allSongsPosted =
@@ -463,24 +694,26 @@ export default function Daily({
     JSON.stringify(savedVotes);
 
   const hasExistingSaves =
-    Object.keys(savedVotes).length > 0;
+    Object.keys(savedVotes).length >
+    0;
 
   const canSubmit =
     allSongsPosted &&
     allSongsHaveScores &&
-    (hasChanges || !hasExistingSaves);
+    (
+      hasChanges ||
+      !hasExistingSaves
+    );
 
-  /*
-   * Save all changed votes
-   */
+  // ==========================================================
+  // SAVE VOTES
+  // ==========================================================
+
   const handleSubmitBatchVotes =
     async () => {
       if (!canSubmit) {
         return;
       }
-
-      setVoteError(null);
-      setIsSubmittingVotes(true);
 
       const token =
         localStorage.getItem(
@@ -488,10 +721,12 @@ export default function Daily({
         );
 
       if (!token) {
-        setIsSubmittingVotes(false);
         handleUnauthorized();
         return;
       }
+
+      setVoteError(null);
+      setIsSubmittingVotes(true);
 
       try {
         for (const song of targetSongs) {
@@ -510,11 +745,9 @@ export default function Daily({
 
           let response;
 
-          /*
-           * Remove an existing vote
-           */
           if (
-            targetScore === undefined
+            targetScore ===
+            undefined
           ) {
             response = await fetch(
               `${import.meta.env.VITE_API_URL}/api/votes/${song.id}`,
@@ -526,12 +759,8 @@ export default function Daily({
                 }
               }
             );
-          }
 
-          /*
-           * Add/update a vote
-           */
-          else {
+          } else {
             response = await fetch(
               `${import.meta.env.VITE_API_URL}/api/votes`,
               {
@@ -543,8 +772,10 @@ export default function Daily({
                     `Bearer ${token}`
                 },
                 body: JSON.stringify({
-                  song_id: song.id,
-                  score: targetScore
+                  song_id:
+                    song.id,
+                  score:
+                    targetScore
                 })
               }
             );
@@ -558,22 +789,14 @@ export default function Daily({
           }
 
           if (!response.ok) {
-            let message =
-              'Failed to save votes.';
+            const errorData =
+              await response.json()
+                .catch(() => ({}));
 
-            try {
-              const errorData =
-                await response.json();
-
-              if (errorData.detail) {
-                message =
-                  errorData.detail;
-              }
-            } catch {
-              // Ignore malformed response
-            }
-
-            throw new Error(message);
+            throw new Error(
+              errorData.detail ||
+              'Failed to save votes.'
+            );
           }
         }
 
@@ -582,28 +805,27 @@ export default function Daily({
         });
 
       } catch (err) {
-        console.error(
-          'Vote save error:',
-          err
-        );
+        console.error(err);
 
         setVoteError(
           err.message ||
-            'Failed to sync votes with server.'
+          'Failed to sync votes with server.'
         );
+
       } finally {
         setIsSubmittingVotes(false);
       }
     };
 
-  /*
-   * Clear local selections
-   */
   const handleClearAllVotesLocally =
     () => {
       setMyVotes({});
       setVoteError(null);
     };
+
+  // ==========================================================
+  // RENDER
+  // ==========================================================
 
   return (
     <div
@@ -613,12 +835,16 @@ export default function Daily({
         gap: '2rem'
       }}
     >
+      {/* ==================================================== */}
       {/* DATE SELECTOR */}
+      {/* ==================================================== */}
+
       <div
         style={{
           background:
             'var(--bg-card)',
-          padding: '1.5rem 2rem',
+          padding:
+            '1.5rem 2rem',
           borderRadius:
             'var(--border-radius-lg)',
           border:
@@ -651,8 +877,8 @@ export default function Daily({
             }}
           >
             Select a past or present
-            date to submit or update
-            votes.
+            date to submit, edit, or
+            vote.
           </p>
         </div>
 
@@ -706,7 +932,10 @@ export default function Daily({
         </div>
       </div>
 
-      {/* SONG SUBMISSION */}
+      {/* ==================================================== */}
+      {/* MY CURRENT SUBMISSION / NEW SUBMISSION */}
+      {/* ==================================================== */}
+
       <div
         style={{
           background:
@@ -718,163 +947,346 @@ export default function Daily({
             '1px solid var(--border-color)'
         }}
       >
-        <h3
-          style={{
-            fontSize: '1.1rem',
-            marginBottom: '1rem'
-          }}
-        >
-          Post Track for {selectedDate}
-        </h3>
-
-        <form
-          onSubmit={handlePreview}
-          style={{
-            display: 'flex',
-            gap: '1rem'
-          }}
-        >
-          <input
-            type="text"
-            placeholder="Paste Spotify Link here..."
-            value={spotifyUrl}
-            onChange={(e) =>
-              setSpotifyUrl(
-                e.target.value
-              )
-            }
-            style={{
-              flex: 1,
-              padding:
-                '0.8rem 1rem',
-              borderRadius: '8px',
-              border:
-                '1px solid var(--border-color)',
-              background:
-                'var(--bg-secondary)',
-              color:
-                'var(--text-main)',
-              fontSize: '1rem'
-            }}
-            required
-          />
-
-          <button
-            type="submit"
-            style={{
-              background:
-                'var(--bg-secondary)',
-              color:
-                'var(--text-main)',
-              border:
-                '1px solid var(--border-color)',
-              padding:
-                '0 1.5rem',
-              borderRadius: '8px',
-              fontWeight: 'bold',
-              cursor: 'pointer'
-            }}
-          >
-            Preview
-          </button>
-        </form>
-
-        {previewData && (
-          <div
-            style={{
-              marginTop: '2rem',
-              display: 'flex',
-              justifyContent:
-                'space-between',
-              alignItems: 'center',
-              background:
-                'var(--bg-primary)',
-              padding: '1.5rem',
-              borderRadius: '12px',
-              border:
-                '1px solid var(--accent-green)'
-            }}
-          >
+        {mySong ? (
+          <>
             <div
               style={{
                 display: 'flex',
-                gap: '1.5rem',
-                alignItems: 'center'
+                justifyContent:
+                  'space-between',
+                alignItems:
+                  'center',
+                gap: '1rem',
+                flexWrap:
+                  'wrap'
               }}
             >
-              <img
-                src={
-                  previewData.cover_art_url
-                }
-                alt="Cover"
-                style={{
-                  width: '80px',
-                  height: '80px',
-                  borderRadius: '8px'
-                }}
-              />
-
               <div>
                 <h3
                   style={{
-                    margin: 0,
-                    fontSize: '1.2rem'
+                    fontSize:
+                      '1.1rem',
+                    margin: 0
                   }}
                 >
-                  {previewData.title}
+                  Your Song for{' '}
+                  {selectedDate}
                 </h3>
 
                 <p
                   style={{
                     margin:
-                      '0.3rem 0 0 0',
+                      '0.5rem 0 0 0',
                     color:
                       'var(--text-muted)'
                   }}
                 >
-                  {previewData.artist}
+                  <strong
+                    style={{
+                      color:
+                        'var(--text-main)'
+                    }}
+                  >
+                    {mySong.title}
+                  </strong>
+                  {' — '}
+                  {mySong.artist}
                 </p>
-              </div>
-            </div>
 
-            <button
-              onClick={
-                handleDatabaseSubmit
-              }
+                {mySong.spotify_url && (
+                  <a
+                    href={
+                      mySong.spotify_url
+                    }
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{
+                      display:
+                        'inline-block',
+                      marginTop:
+                        '0.5rem',
+                      color:
+                        'var(--accent-green)',
+                      fontSize:
+                        '0.85rem'
+                    }}
+                  >
+                    Open in Spotify
+                  </a>
+                )}
+              </div>
+
+              <button
+                onClick={() =>
+                  startEditingSong(
+                    mySong
+                  )
+                }
+                style={{
+                  background:
+                    'transparent',
+                  color:
+                    'var(--accent-green)',
+                  border:
+                    '1px solid var(--accent-green)',
+                  padding:
+                    '0.6rem 1.2rem',
+                  borderRadius:
+                    '8px',
+                  fontWeight:
+                    'bold',
+                  cursor:
+                    'pointer'
+                }}
+              >
+                Edit My Song
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <h3
               style={{
-                background:
-                  'var(--accent-green)',
-                color: '#000',
-                border: 'none',
-                padding:
-                  '0.8rem 2rem',
-                borderRadius: '8px',
-                fontWeight: 'bold',
-                cursor: 'pointer'
+                fontSize:
+                  '1.1rem',
+                marginBottom:
+                  '1rem'
               }}
             >
-              Submit for {selectedDate}
-            </button>
-          </div>
+              Post Track for{' '}
+              {selectedDate}
+            </h3>
+
+            <form
+              onSubmit={
+                handlePreview
+              }
+              style={{
+                display: 'flex',
+                gap: '1rem',
+                flexWrap:
+                  'wrap'
+              }}
+            >
+              <input
+                type="text"
+                placeholder="Paste Spotify Link here..."
+                value={
+                  spotifyUrl
+                }
+                onChange={(e) =>
+                  setSpotifyUrl(
+                    e.target.value
+                  )
+                }
+                style={{
+                  flex: 1,
+                  minWidth:
+                    '250px',
+                  padding:
+                    '0.8rem 1rem',
+                  borderRadius:
+                    '8px',
+                  border:
+                    '1px solid var(--border-color)',
+                  background:
+                    'var(--bg-secondary)',
+                  color:
+                    'var(--text-main)',
+                  fontSize:
+                    '1rem'
+                }}
+                required
+              />
+
+              <button
+                type="submit"
+                disabled={
+                  isPreviewing
+                }
+                style={{
+                  background:
+                    'var(--bg-secondary)',
+                  color:
+                    'var(--text-main)',
+                  border:
+                    '1px solid var(--border-color)',
+                  padding:
+                    '0 1.5rem',
+                  borderRadius:
+                    '8px',
+                  fontWeight:
+                    'bold',
+                  cursor:
+                    isPreviewing
+                      ? 'not-allowed'
+                      : 'pointer',
+                  opacity:
+                    isPreviewing
+                      ? 0.6
+                      : 1
+                }}
+              >
+                {isPreviewing
+                  ? 'Loading...'
+                  : 'Preview'}
+              </button>
+            </form>
+
+            {previewData && (
+              <div
+                style={{
+                  marginTop:
+                    '2rem',
+                  display:
+                    'flex',
+                  justifyContent:
+                    'space-between',
+                  alignItems:
+                    'center',
+                  gap: '1rem',
+                  flexWrap:
+                    'wrap',
+                  background:
+                    'var(--bg-primary)',
+                  padding:
+                    '1.5rem',
+                  borderRadius:
+                    '12px',
+                  border:
+                    '1px solid var(--accent-green)'
+                }}
+              >
+                <div
+                  style={{
+                    display:
+                      'flex',
+                    gap:
+                      '1.5rem',
+                    alignItems:
+                      'center'
+                  }}
+                >
+                  {previewData.cover_art_url && (
+                    <img
+                      src={
+                        previewData.cover_art_url
+                      }
+                      alt="Album artwork"
+                      style={{
+                        width:
+                          '80px',
+                        height:
+                          '80px',
+                        borderRadius:
+                          '8px',
+                        objectFit:
+                          'cover'
+                      }}
+                    />
+                  )}
+
+                  <div>
+                    <h3
+                      style={{
+                        margin: 0,
+                        fontSize:
+                          '1.2rem'
+                      }}
+                    >
+                      {
+                        previewData.title
+                      }
+                    </h3>
+
+                    <p
+                      style={{
+                        margin:
+                          '0.3rem 0 0 0',
+                        color:
+                          'var(--text-muted)'
+                      }}
+                    >
+                      {
+                        previewData.artist
+                      }
+                    </p>
+
+                    {previewData.album && (
+                      <p
+                        style={{
+                          margin:
+                            '0.25rem 0 0 0',
+                          color:
+                            'var(--text-muted)',
+                          fontSize:
+                            '0.8rem'
+                        }}
+                      >
+                        {
+                          previewData.album
+                        }
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                <button
+                  onClick={
+                    handleDatabaseSubmit
+                  }
+                  style={{
+                    background:
+                      'var(--accent-green)',
+                    color: '#000',
+                    border:
+                      'none',
+                    padding:
+                      '0.8rem 2rem',
+                    borderRadius:
+                      '8px',
+                    fontWeight:
+                      'bold',
+                    cursor:
+                      'pointer'
+                  }}
+                >
+                  Submit for{' '}
+                  {selectedDate}
+                </button>
+              </div>
+            )}
+          </>
         )}
 
         {submitStatus && (
           <div
             style={{
-              marginTop: '1.5rem',
-              padding: '1rem',
-              borderRadius: '8px',
-              textAlign: 'center',
-              fontWeight: 'bold',
+              marginTop:
+                '1.5rem',
+              padding:
+                '1rem',
+              borderRadius:
+                '8px',
+              textAlign:
+                'center',
+              fontWeight:
+                'bold',
               background:
                 submitStatus.includes(
                   'Success'
+                ) ||
+                submitStatus.includes(
+                  'successfully'
                 )
                   ? 'rgba(46, 213, 115, 0.1)'
                   : 'rgba(255, 71, 87, 0.1)',
               color:
                 submitStatus.includes(
                   'Success'
+                ) ||
+                submitStatus.includes(
+                  'successfully'
                 )
                   ? '#2ed573'
                   : '#ff4757'
@@ -885,7 +1297,304 @@ export default function Daily({
         )}
       </div>
 
-      {/* VOTING */}
+      {/* ==================================================== */}
+      {/* EDIT PANEL */}
+      {/* ==================================================== */}
+
+      {editingSong && (
+        <div
+          style={{
+            background:
+              'var(--bg-card)',
+            padding: '2rem',
+            borderRadius:
+              'var(--border-radius-lg)',
+            border:
+              '1px solid var(--accent-green)'
+          }}
+        >
+          <div
+            style={{
+              display:
+                'flex',
+              justifyContent:
+                'space-between',
+              alignItems:
+                'center',
+              gap: '1rem',
+              marginBottom:
+                '1.5rem'
+            }}
+          >
+            <div>
+              <h3
+                style={{
+                  fontSize:
+                    '1.1rem',
+                  margin: 0
+                }}
+              >
+                Edit Your Song
+              </h3>
+
+              <p
+                style={{
+                  margin:
+                    '0.4rem 0 0 0',
+                  color:
+                    'var(--text-muted)',
+                  fontSize:
+                    '0.85rem'
+                }}
+              >
+                Replace it with a
+                different Spotify
+                track.
+              </p>
+            </div>
+
+            <button
+              onClick={
+                cancelEditingSong
+              }
+              style={{
+                background:
+                  'transparent',
+                color:
+                  'var(--text-muted)',
+                border:
+                  '1px solid var(--border-color)',
+                padding:
+                  '0.4rem 0.8rem',
+                borderRadius:
+                  '6px',
+                cursor:
+                  'pointer'
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+
+          <form
+            onSubmit={
+              handleEditPreview
+            }
+            style={{
+              display:
+                'flex',
+              gap: '1rem',
+              flexWrap:
+                'wrap'
+            }}
+          >
+            <input
+              type="text"
+              placeholder="Paste new Spotify link..."
+              value={
+                editSpotifyUrl
+              }
+              onChange={(e) =>
+                setEditSpotifyUrl(
+                  e.target.value
+                )
+              }
+              style={{
+                flex: 1,
+                minWidth:
+                  '250px',
+                padding:
+                  '0.8rem 1rem',
+                borderRadius:
+                  '8px',
+                border:
+                  '1px solid var(--border-color)',
+                background:
+                  'var(--bg-secondary)',
+                color:
+                  'var(--text-main)',
+                fontSize:
+                  '1rem'
+              }}
+              required
+            />
+
+            <button
+              type="submit"
+              disabled={
+                isPreviewingEdit
+              }
+              style={{
+                background:
+                  'var(--bg-secondary)',
+                color:
+                  'var(--text-main)',
+                border:
+                  '1px solid var(--border-color)',
+                padding:
+                  '0 1.5rem',
+                borderRadius:
+                  '8px',
+                fontWeight:
+                  'bold',
+                cursor:
+                  isPreviewingEdit
+                    ? 'not-allowed'
+                    : 'pointer',
+                opacity:
+                  isPreviewingEdit
+                    ? 0.6
+                    : 1
+              }}
+            >
+              {isPreviewingEdit
+                ? 'Loading...'
+                : 'Preview New Song'}
+            </button>
+          </form>
+
+          {editPreviewData && (
+            <div
+              style={{
+                marginTop:
+                  '1.5rem',
+                padding:
+                  '1.5rem',
+                background:
+                  'var(--bg-primary)',
+                borderRadius:
+                  '12px'
+              }}
+            >
+              <div
+                style={{
+                  display:
+                    'flex',
+                  justifyContent:
+                    'space-between',
+                  alignItems:
+                    'center',
+                  gap: '1rem',
+                  flexWrap:
+                    'wrap'
+                }}
+              >
+                <div
+                  style={{
+                    display:
+                      'flex',
+                    gap:
+                      '1rem',
+                    alignItems:
+                      'center'
+                  }}
+                >
+                  {editPreviewData.cover_art_url && (
+                    <img
+                      src={
+                        editPreviewData.cover_art_url
+                      }
+                      alt="New album artwork"
+                      style={{
+                        width:
+                          '80px',
+                        height:
+                          '80px',
+                        borderRadius:
+                          '8px',
+                        objectFit:
+                          'cover'
+                      }}
+                    />
+                  )}
+
+                  <div>
+                    <h3
+                      style={{
+                        margin: 0
+                      }}
+                    >
+                      {
+                        editPreviewData.title
+                      }
+                    </h3>
+
+                    <p
+                      style={{
+                        margin:
+                          '0.3rem 0 0 0',
+                        color:
+                          'var(--text-muted)'
+                      }}
+                    >
+                      {
+                        editPreviewData.artist
+                      }
+                    </p>
+
+                    {editPreviewData.album && (
+                      <p
+                        style={{
+                          margin:
+                            '0.25rem 0 0 0',
+                          color:
+                            'var(--text-muted)',
+                          fontSize:
+                            '0.8rem'
+                        }}
+                      >
+                        {
+                          editPreviewData.album
+                        }
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                <button
+                  onClick={
+                    handleUpdateSong
+                  }
+                  disabled={
+                    isUpdatingSong
+                  }
+                  style={{
+                    background:
+                      'var(--accent-green)',
+                    color:
+                      '#000',
+                    border:
+                      'none',
+                    padding:
+                      '0.8rem 1.5rem',
+                    borderRadius:
+                      '8px',
+                    fontWeight:
+                      'bold',
+                    cursor:
+                      isUpdatingSong
+                        ? 'not-allowed'
+                        : 'pointer',
+                    opacity:
+                      isUpdatingSong
+                        ? 0.6
+                        : 1
+                  }}
+                >
+                  {isUpdatingSong
+                    ? 'Saving...'
+                    : 'Save Changes'}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ==================================================== */}
+      {/* VOTING PANEL */}
+      {/* ==================================================== */}
+
       <div
         style={{
           background:
@@ -899,32 +1608,40 @@ export default function Daily({
       >
         <div
           style={{
-            display: 'flex',
+            display:
+              'flex',
             justifyContent:
               'space-between',
-            alignItems: 'center',
-            marginBottom: '1rem',
-            flexWrap: 'wrap',
-            gap: '1rem'
+            alignItems:
+              'center',
+            marginBottom:
+              '1rem',
+            flexWrap:
+              'wrap',
+            gap:
+              '1rem'
           }}
         >
           <div>
             <h3
               style={{
-                fontSize: '1.1rem',
+                fontSize:
+                  '1.1rem',
                 margin: 0
               }}
             >
               Votes & Tracks for{' '}
-              {selectedDate} (
+              {selectedDate}{' '}
+              (
               {targetSongs.length}/
-              {totalUserCount} Songs
-              Posted)
+              {totalUserCount}{' '}
+              Songs Posted)
             </h3>
 
             <p
               style={{
-                fontSize: '0.85rem',
+                fontSize:
+                  '0.85rem',
                 color:
                   'var(--text-muted)',
                 margin:
@@ -941,8 +1658,10 @@ export default function Daily({
 
           <div
             style={{
-              display: 'flex',
-              gap: '0.8rem'
+              display:
+                'flex',
+              gap:
+                '0.8rem'
             }}
           >
             {targetSongs.length >
@@ -954,14 +1673,18 @@ export default function Daily({
                 style={{
                   background:
                     'transparent',
-                  color: '#ff4757',
+                  color:
+                    '#ff4757',
                   border:
                     '1px solid #ff4757',
                   padding:
                     '0.5rem 1rem',
-                  borderRadius: '8px',
-                  fontWeight: 'bold',
-                  cursor: 'pointer',
+                  borderRadius:
+                    '8px',
+                  fontWeight:
+                    'bold',
+                  cursor:
+                    'pointer',
                   fontSize:
                     '0.85rem'
                 }}
@@ -991,15 +1714,19 @@ export default function Daily({
                   '1px solid var(--border-color)',
                 padding:
                   '0.5rem 1.5rem',
-                borderRadius: '8px',
-                fontWeight: 'bold',
+                borderRadius:
+                  '8px',
+                fontWeight:
+                  'bold',
                 cursor:
                   canSubmit &&
                   !isSubmittingVotes
                     ? 'pointer'
                     : 'not-allowed',
                 opacity:
-                  canSubmit ? 1 : 0.6,
+                  canSubmit
+                    ? 1
+                    : 0.6,
                 fontSize:
                   '0.9rem',
                 boxShadow:
@@ -1025,11 +1752,14 @@ export default function Daily({
             style={{
               marginBottom:
                 '1.5rem',
-              padding: '1rem',
-              borderRadius: '8px',
+              padding:
+                '1rem',
+              borderRadius:
+                '8px',
               textAlign:
                 'center',
-              fontWeight: 'bold',
+              fontWeight:
+                'bold',
               background:
                 'rgba(255, 71, 87, 0.1)',
               color:
@@ -1059,19 +1789,22 @@ export default function Daily({
                 'var(--text-muted)',
               textAlign:
                 'center',
-              padding: '1rem'
+              padding:
+                '1rem'
             }}
           >
-            No tracks found for
-            this date.
+            No tracks found for this
+            date.
           </p>
         ) : (
           <div
             style={{
-              display: 'flex',
+              display:
+                'flex',
               flexDirection:
                 'column',
-              gap: '1.5rem'
+              gap:
+                '1.5rem'
             }}
           >
             {targetSongs.map(
@@ -1081,11 +1814,22 @@ export default function Daily({
                     song.submittedBy
                   );
 
+                const isMySong =
+                  Number(
+                    song.submitter_id
+                  ) ===
+                  Number(
+                    currentUser.id
+                  );
+
                 return (
                   <div
-                    key={song.id}
+                    key={
+                      song.id
+                    }
                     style={{
-                      display: 'flex',
+                      display:
+                        'flex',
                       justifyContent:
                         'space-between',
                       alignItems:
@@ -1093,10 +1837,20 @@ export default function Daily({
                       borderBottom:
                         '1px solid var(--border-color)',
                       paddingBottom:
-                        '1.5rem'
+                        '1.5rem',
+                      gap:
+                        '1rem',
+                      flexWrap:
+                        'wrap'
                     }}
                   >
-                    <div>
+                    <div
+                      style={{
+                        flex: 1,
+                        minWidth:
+                          '240px'
+                      }}
+                    >
                       <h3
                         style={{
                           fontSize:
@@ -1119,10 +1873,12 @@ export default function Daily({
                             '0.3rem 0 0 0'
                         }}
                       >
-                        {song.artist}{' '}
+                        {song.artist}
+
                         <span
                           style={{
-                            opacity: 0.8,
+                            opacity:
+                              0.8,
                             marginLeft:
                               '0.5rem'
                           }}
@@ -1140,13 +1896,79 @@ export default function Daily({
                           </strong>
                         </span>
                       </p>
+
+                      <div
+                        style={{
+                          display:
+                            'flex',
+                          alignItems:
+                            'center',
+                          gap:
+                            '0.8rem',
+                          marginTop:
+                            '0.6rem',
+                          flexWrap:
+                            'wrap'
+                        }}
+                      >
+                        {song.spotify_url && (
+                          <a
+                            href={
+                              song.spotify_url
+                            }
+                            target="_blank"
+                            rel="noreferrer"
+                            style={{
+                              color:
+                                'var(--accent-green)',
+                              fontSize:
+                                '0.8rem',
+                              textDecoration:
+                                'none'
+                            }}
+                          >
+                            Open in Spotify
+                          </a>
+                        )}
+
+                        {isMySong && (
+                          <button
+                            onClick={() =>
+                              startEditingSong(
+                                song
+                              )
+                            }
+                            style={{
+                              background:
+                                'transparent',
+                              color:
+                                'var(--accent-green)',
+                              border:
+                                '1px solid var(--accent-green)',
+                              padding:
+                                '0.3rem 0.7rem',
+                              borderRadius:
+                                '6px',
+                              fontWeight:
+                                'bold',
+                              cursor:
+                                'pointer',
+                              fontSize:
+                                '0.75rem'
+                            }}
+                          >
+                            Edit My Song
+                          </button>
+                        )}
+                      </div>
                     </div>
 
                     <div
                       style={{
                         display:
                           'flex',
-                        gap: '0.5rem'
+                        gap:
+                          '0.5rem'
                       }}
                     >
                       {[1, 2, 3, 4, 5].map(

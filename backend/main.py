@@ -1,35 +1,66 @@
+import os
+import re
 import statistics
 from datetime import datetime, date, timedelta
 from typing import Optional
 
-from fastapi import FastAPI, Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from fastapi.middleware.cors import CORSMiddleware
-
-from pydantic import BaseModel, HttpUrl
-from jose import JWTError, jwt
-
 import bcrypt
-from sqlmodel import SQLModel, Field, Session, create_engine, select
-
-import os
-
-import re
 import httpx
 
+from fastapi import (
+    FastAPI,
+    Depends,
+    HTTPException,
+    status,
+)
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import (
+    OAuth2PasswordBearer,
+    OAuth2PasswordRequestForm,
+)
+
+from jose import JWTError, jwt
+from pydantic import BaseModel, HttpUrl
+from sqlalchemy import inspect, text
+from sqlmodel import (
+    SQLModel,
+    Field,
+    Session,
+    create_engine,
+    select,
+)
+
 
 # ============================================================
-# CONFIG
+# CONFIGURATION
 # ============================================================
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
 
 SECRET_KEY = os.getenv(
     "SECRET_KEY",
-    "fallback-dev-key-for-local-testing"
+    "fallback-dev-key-for-local-testing",
 )
 
 ALGORITHM = "HS256"
 
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 30
+
+SPOTIFY_CLIENT_ID = os.getenv(
+    "SPOTIFY_CLIENT_ID"
+)
+
+SPOTIFY_CLIENT_SECRET = os.getenv(
+    "SPOTIFY_CLIENT_SECRET"
+)
+
+SPOTIFY_MARKET = os.getenv(
+    "SPOTIFY_MARKET",
+    "US",
+)
 
 
 # ============================================================
@@ -54,31 +85,31 @@ app.add_middleware(
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "sqlite:///moosic_local.db"
+    "sqlite:///moosic_local.db",
 )
 
-# Some hosted Postgres providers use postgres://
+# Some hosted Postgres services use postgres://
 # while SQLAlchemy expects postgresql://
 
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace(
         "postgres://",
         "postgresql://",
-        1
+        1,
     )
 
 
-# SQLite needs check_same_thread=False
+# SQLite requires check_same_thread=False.
 if DATABASE_URL.startswith("sqlite"):
     engine = create_engine(
         DATABASE_URL,
         connect_args={
-            "check_same_thread": False
-        }
+            "check_same_thread": False,
+        },
     )
 else:
     engine = create_engine(
-        DATABASE_URL
+        DATABASE_URL,
     )
 
 
@@ -89,12 +120,12 @@ else:
 class User(SQLModel, table=True):
     id: Optional[int] = Field(
         default=None,
-        primary_key=True
+        primary_key=True,
     )
 
     username: str = Field(
         unique=True,
-        index=True
+        index=True,
     )
 
     hashed_password: str
@@ -103,25 +134,33 @@ class User(SQLModel, table=True):
 class Song(SQLModel, table=True):
     id: Optional[int] = Field(
         default=None,
-        primary_key=True
+        primary_key=True,
     )
 
     title: str
+
     artist: str
 
     submitter_id: int
 
     submission_date: date
 
+    # Spotify information
+    spotify_url: Optional[str] = None
+
+    spotify_track_id: Optional[str] = None
+
 
 class Vote(SQLModel, table=True):
     id: Optional[int] = Field(
         default=None,
-        primary_key=True
+        primary_key=True,
     )
 
     song_id: int
+
     voter_id: int
+
     score: int
 
 
@@ -133,11 +172,18 @@ class SongCreate(BaseModel):
     title: str
     artist: str
 
-    # IMPORTANT:
-    # submitter_id is intentionally NOT accepted
-    # from the browser anymore.
+    spotify_url: Optional[str] = None
+    spotify_track_id: Optional[str] = None
 
     submission_date: Optional[date] = None
+
+
+class SongUpdate(BaseModel):
+    title: str
+    artist: str
+
+    spotify_url: Optional[str] = None
+    spotify_track_id: Optional[str] = None
 
 
 class VoteCreate(BaseModel):
@@ -164,66 +210,132 @@ def get_session():
 
 
 # ============================================================
-# AUTHENTICATION
+# DATABASE MIGRATION / SETUP
+# ============================================================
+
+def ensure_database_columns():
+    """
+    SQLModel.metadata.create_all() creates missing tables,
+    but it does not add new columns to an existing table.
+
+    This function adds the Spotify columns to existing
+    installations automatically.
+    """
+
+    inspector = inspect(engine)
+
+    if not inspector.has_table("song"):
+        return
+
+    existing_columns = {
+        column["name"]
+        for column in inspector.get_columns("song")
+    }
+
+    backend = engine.url.get_backend_name()
+
+    with engine.begin() as connection:
+        if "spotify_url" not in existing_columns:
+            if backend == "postgresql":
+                connection.execute(
+                    text(
+                        "ALTER TABLE song "
+                        "ADD COLUMN IF NOT EXISTS "
+                        "spotify_url TEXT"
+                    )
+                )
+            else:
+                connection.execute(
+                    text(
+                        "ALTER TABLE song "
+                        "ADD COLUMN spotify_url TEXT"
+                    )
+                )
+
+        if "spotify_track_id" not in existing_columns:
+            if backend == "postgresql":
+                connection.execute(
+                    text(
+                        "ALTER TABLE song "
+                        "ADD COLUMN IF NOT EXISTS "
+                        "spotify_track_id TEXT"
+                    )
+                )
+            else:
+                connection.execute(
+                    text(
+                        "ALTER TABLE song "
+                        "ADD COLUMN spotify_track_id TEXT"
+                    )
+                )
+
+
+# ============================================================
+# AUTHENTICATION HELPERS
 # ============================================================
 
 def create_access_token(data: dict):
     to_encode = data.copy()
 
-    expire = datetime.utcnow() + timedelta(
-        minutes=ACCESS_TOKEN_EXPIRE_MINUTES
+    expire = (
+        datetime.utcnow()
+        + timedelta(
+            minutes=ACCESS_TOKEN_EXPIRE_MINUTES
+        )
     )
 
-    to_encode.update({
-        "exp": expire
-    })
+    to_encode.update(
+        {
+            "exp": expire,
+        }
+    )
 
     return jwt.encode(
         to_encode,
         SECRET_KEY,
-        algorithm=ALGORITHM
+        algorithm=ALGORITHM,
     )
 
 
 def verify_password(
     plain_password,
-    hashed_password
+    hashed_password,
 ):
     return bcrypt.checkpw(
         plain_password.encode("utf-8"),
-        hashed_password.encode("utf-8")
+        hashed_password.encode("utf-8"),
     )
 
 
 def get_password_hash(password):
     return bcrypt.hashpw(
         password.encode("utf-8"),
-        bcrypt.gensalt()
+        bcrypt.gensalt(),
     ).decode("utf-8")
 
 
 oauth2_scheme = OAuth2PasswordBearer(
-    tokenUrl="/api/login"
+    tokenUrl="/api/login",
 )
 
 
 def get_current_user(
     token: str = Depends(oauth2_scheme),
-    session: Session = Depends(get_session)
+    session: Session = Depends(get_session),
 ):
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
         headers={
-            "WWW-Authenticate": "Bearer"
-        }
+            "WWW-Authenticate": "Bearer",
+        },
     )
 
     try:
         payload = jwt.decode(
             token,
             SECRET_KEY,
-            algorithms=[ALGORITHM]
+            algorithms=[ALGORITHM],
         )
 
         username: str = payload.get("sub")
@@ -247,6 +359,110 @@ def get_current_user(
 
 
 # ============================================================
+# SPOTIFY HELPERS
+# ============================================================
+
+def extract_spotify_track_id(
+    url: str,
+) -> str:
+    """
+    Supports:
+
+    https://open.spotify.com/track/TRACK_ID
+    https://open.spotify.com/track/TRACK_ID?si=...
+    spotify:track:TRACK_ID
+    """
+
+    spotify_uri_match = re.match(
+        r"^spotify:track:([A-Za-z0-9]+)$",
+        url,
+    )
+
+    if spotify_uri_match:
+        return spotify_uri_match.group(1)
+
+    spotify_web_match = re.search(
+        r"open\.spotify\.com/track/([A-Za-z0-9]+)",
+        url,
+    )
+
+    if spotify_web_match:
+        return spotify_web_match.group(1)
+
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            "Invalid Spotify track URL. "
+            "Please paste a Spotify track link."
+        ),
+    )
+
+
+def get_spotify_access_token() -> str:
+    """
+    Uses Spotify's Client Credentials flow.
+    """
+
+    if (
+        not SPOTIFY_CLIENT_ID
+        or not SPOTIFY_CLIENT_SECRET
+    ):
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Spotify API credentials are not "
+                "configured on the server."
+            ),
+        )
+
+    try:
+        response = httpx.post(
+            "https://accounts.spotify.com/api/token",
+            data={
+                "grant_type": "client_credentials",
+            },
+            auth=(
+                SPOTIFY_CLIENT_ID,
+                SPOTIFY_CLIENT_SECRET,
+            ),
+            timeout=10.0,
+        )
+
+    except httpx.RequestError:
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Unable to connect to Spotify."
+            ),
+        )
+
+    if response.status_code != 200:
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Spotify authentication failed."
+            ),
+        )
+
+    data = response.json()
+
+    access_token = data.get(
+        "access_token"
+    )
+
+    if not access_token:
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Spotify did not return "
+                "an access token."
+            ),
+        )
+
+    return access_token
+
+
+# ============================================================
 # STARTUP
 # ============================================================
 
@@ -256,6 +472,8 @@ def on_startup():
         engine
     )
 
+    ensure_database_columns()
+
 
 # ============================================================
 # LOGIN
@@ -264,7 +482,9 @@ def on_startup():
 @app.post("/api/login")
 def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
-    session: Session = Depends(get_session)
+    session: Session = Depends(
+        get_session
+    ),
 ):
     user = session.exec(
         select(User).where(
@@ -277,17 +497,19 @@ def login(
         not user
         or not verify_password(
             form_data.password,
-            user.hashed_password
+            user.hashed_password,
         )
     ):
         raise HTTPException(
             status_code=400,
-            detail="Incorrect username or password"
+            detail=(
+                "Incorrect username or password"
+            ),
         )
 
     access_token = create_access_token(
         data={
-            "sub": user.username
+            "sub": user.username,
         }
     )
 
@@ -295,7 +517,7 @@ def login(
         "access_token": access_token,
         "token_type": "bearer",
         "user_id": user.id,
-        "username": user.username
+        "username": user.username,
     }
 
 
@@ -306,12 +528,14 @@ def login(
 @app.put("/api/users/update-profile")
 def update_profile(
     update_data: ProfileUpdate,
-    current_user: User = Depends(get_current_user),
-    session: Session = Depends(get_session)
+    current_user: User = Depends(
+        get_current_user
+    ),
+    session: Session = Depends(
+        get_session
+    ),
 ):
-    # Make sure another user isn't already using
-    # the requested username.
-
+    # Don't allow the username to collide with another account.
     existing_user = session.exec(
         select(User).where(
             User.username ==
@@ -325,7 +549,9 @@ def update_profile(
     ):
         raise HTTPException(
             status_code=400,
-            detail="Username is already taken."
+            detail=(
+                "Username is already taken."
+            ),
         )
 
     current_user.username = (
@@ -341,12 +567,11 @@ def update_profile(
 
     session.add(current_user)
     session.commit()
-    session.refresh(current_user)
 
-    # Username changed, so create a fresh JWT
     new_token = create_access_token(
         data={
-            "sub": current_user.username
+            "sub":
+                current_user.username,
         }
     )
 
@@ -354,7 +579,8 @@ def update_profile(
         "status": "success",
         "message": "Profile updated!",
         "access_token": new_token,
-        "username": current_user.username
+        "username":
+            current_user.username,
     }
 
 
@@ -365,7 +591,9 @@ def update_profile(
 @app.get("/api/songs/daily/{target_date}")
 def get_daily_songs(
     target_date: date,
-    session: Session = Depends(get_session)
+    session: Session = Depends(
+        get_session
+    ),
 ):
     songs = session.exec(
         select(Song).where(
@@ -385,20 +613,27 @@ def get_daily_songs(
 
     result = []
 
-    for s in songs:
-        result.append({
-            "id": s.id,
-            "title": s.title,
-            "artist": s.artist,
-            "submitter_id": s.submitter_id,
-            "submittedBy":
-                id_to_username.get(
-                    s.submitter_id,
-                    "Unknown"
-                ),
-            "submission_date":
-                s.submission_date
-        })
+    for song in songs:
+        result.append(
+            {
+                "id": song.id,
+                "title": song.title,
+                "artist": song.artist,
+                "submitter_id":
+                    song.submitter_id,
+                "submittedBy":
+                    id_to_username.get(
+                        song.submitter_id,
+                        "Unknown",
+                    ),
+                "submission_date":
+                    song.submission_date,
+                "spotify_url":
+                    song.spotify_url,
+                "spotify_track_id":
+                    song.spotify_track_id,
+            }
+        )
 
     return result
 
@@ -415,7 +650,7 @@ def get_my_votes_for_date(
     ),
     session: Session = Depends(
         get_session
-    )
+    ),
 ):
     songs = session.exec(
         select(Song).where(
@@ -425,7 +660,8 @@ def get_my_votes_for_date(
     ).all()
 
     song_ids = [
-        s.id for s in songs
+        song.id
+        for song in songs
     ]
 
     if not song_ids:
@@ -434,113 +670,17 @@ def get_my_votes_for_date(
     votes = session.exec(
         select(Vote).where(
             Vote.voter_id ==
-            current_user.id,
+                current_user.id,
             Vote.song_id.in_(
                 song_ids
-            )
+            ),
         )
     ).all()
 
     return {
-        v.song_id: v.score
-        for v in votes
+        vote.song_id: vote.score
+        for vote in votes
     }
-
-
-# ============================================================
-# SPOTIFY HELPERS
-# ============================================================
-
-SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
-SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
-
-
-def extract_spotify_track_id(url: str) -> str:
-    """
-    Accepts common Spotify track formats, including:
-
-    https://open.spotify.com/track/TRACK_ID
-    https://open.spotify.com/track/TRACK_ID?si=...
-    spotify:track:TRACK_ID
-    """
-
-    # Spotify URI
-    uri_match = re.match(
-        r"^spotify:track:([A-Za-z0-9]+)$",
-        url
-    )
-
-    if uri_match:
-        return uri_match.group(1)
-
-    # Spotify web URL
-    web_match = re.search(
-        r"open\.spotify\.com/track/([A-Za-z0-9]+)",
-        url
-    )
-
-    if web_match:
-        return web_match.group(1)
-
-    raise HTTPException(
-        status_code=400,
-        detail=(
-            "Invalid Spotify track URL. "
-            "Please paste a Spotify track link."
-        )
-    )
-
-
-def get_spotify_access_token() -> str:
-    """
-    Get an application access token using
-    Spotify's Client Credentials flow.
-    """
-
-    if not SPOTIFY_CLIENT_ID or not SPOTIFY_CLIENT_SECRET:
-        raise HTTPException(
-            status_code=500,
-            detail=(
-                "Spotify API credentials are not "
-                "configured on the server."
-            )
-        )
-
-    try:
-        response = httpx.post(
-            "https://accounts.spotify.com/api/token",
-            data={
-                "grant_type": "client_credentials"
-            },
-            auth=(
-                SPOTIFY_CLIENT_ID,
-                SPOTIFY_CLIENT_SECRET
-            ),
-            timeout=10.0
-        )
-    except httpx.RequestError:
-        raise HTTPException(
-            status_code=502,
-            detail="Unable to connect to Spotify."
-        )
-
-    if response.status_code != 200:
-        raise HTTPException(
-            status_code=502,
-            detail="Spotify authentication failed."
-        )
-
-    data = response.json()
-
-    access_token = data.get("access_token")
-
-    if not access_token:
-        raise HTTPException(
-            status_code=502,
-            detail="Spotify did not return an access token."
-        )
-
-    return access_token
 
 
 # ============================================================
@@ -550,99 +690,144 @@ def get_spotify_access_token() -> str:
 @app.post("/api/songs/fetch-metadata")
 def fetch_spotify_metadata(
     req: SpotifyUrlRequest,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
 ):
-    """
-    Resolve a Spotify track URL into real Spotify metadata.
-
-    Authentication is required so only logged-in Moosic
-    users can use the submission workflow.
-    """
-
-    spotify_url = str(req.url)
-
-    track_id = extract_spotify_track_id(
-        spotify_url
-    )
-
-    access_token = get_spotify_access_token()
-
     try:
+        print("=== SPOTIFY DEBUG START ===")
+        print("Incoming URL:", str(req.url))
+        print(
+            "Client ID configured:",
+            bool(SPOTIFY_CLIENT_ID)
+        )
+        print(
+            "Client Secret configured:",
+            bool(SPOTIFY_CLIENT_SECRET)
+        )
+
+        spotify_url = str(req.url)
+
+        track_id = extract_spotify_track_id(
+            spotify_url
+        )
+
+        print("Extracted track ID:", track_id)
+
+        access_token = get_spotify_access_token()
+
+        print(
+            "Spotify access token obtained:",
+            bool(access_token)
+        )
+
         response = httpx.get(
             f"https://api.spotify.com/v1/tracks/{track_id}",
             headers={
                 "Authorization":
                     f"Bearer {access_token}"
             },
+            params={
+                "market":
+                    SPOTIFY_MARKET
+            },
             timeout=10.0
         )
-    except httpx.RequestError:
-        raise HTTPException(
-            status_code=502,
-            detail="Unable to connect to Spotify."
+
+        print(
+            "Spotify track response:",
+            response.status_code
         )
 
-    if response.status_code == 401:
-        raise HTTPException(
-            status_code=502,
-            detail=(
-                "Spotify authorization was rejected."
+        print(
+            "Spotify response:",
+            response.text[:1000]
+        )
+
+        if response.status_code == 401:
+            raise HTTPException(
+                status_code=502,
+                detail="Spotify authorization was rejected."
             )
-        )
 
-    if response.status_code == 404:
-        raise HTTPException(
-            status_code=404,
-            detail=(
-                "Spotify track not found. "
-                "Check that the link points to a track."
+        if response.status_code == 403:
+            raise HTTPException(
+                status_code=403,
+                detail="Spotify denied access to this track."
             )
-        )
 
-    if response.status_code == 429:
-        raise HTTPException(
-            status_code=429,
-            detail=(
-                "Spotify is temporarily rate limiting "
-                "requests. Please try again shortly."
+        if response.status_code == 404:
+            raise HTTPException(
+                status_code=404,
+                detail="Spotify track not found."
             )
-        )
 
-    if response.status_code != 200:
-        raise HTTPException(
-            status_code=502,
-            detail=(
-                "Spotify could not retrieve this track."
+        if response.status_code == 429:
+            raise HTTPException(
+                status_code=429,
+                detail="Spotify is temporarily rate limiting requests."
             )
+
+        if response.status_code != 200:
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    f"Spotify returned HTTP "
+                    f"{response.status_code}."
+                )
+            )
+
+        track = response.json()
+
+        artists = track.get("artists") or []
+
+        artist_names = ", ".join(
+            artist.get("name", "")
+            for artist in artists
+            if artist.get("name")
         )
 
-    track = response.json()
+        album = track.get("album") or {}
 
-    artists = track.get("artists") or []
+        album_images = (
+            album.get("images") or []
+        )
 
-    artist_names = ", ".join(
-        artist.get("name", "")
-        for artist in artists
-        if artist.get("name")
-    )
+        cover_art_url = (
+            album_images[0].get("url")
+            if album_images
+            else None
+        )
 
-    album = track.get("album") or {}
-    album_images = album.get("images") or []
+        print("Track name:", track.get("name"))
+        print("Artist:", artist_names)
+        print("=== SPOTIFY DEBUG END ===")
 
-    cover_art_url = (
-        album_images[0].get("url")
-        if album_images
-        else None
-    )
+        return {
+            "title": track.get("name"),
+            "artist": artist_names,
+            "cover_art_url": cover_art_url,
+            "spotify_url": spotify_url,
+            "spotify_track_id": track_id,
+            "album": album.get("name"),
+            "duration_ms": track.get("duration_ms"),
+            "external_url": (
+                track.get("external_urls", {})
+                .get("spotify")
+            ),
+        }
 
-    return {
-        "title": track.get("name"),
-        "artist": artist_names,
-        "cover_art_url": cover_art_url,
-        "spotify_url": spotify_url,
-        "spotify_track_id": track_id
-    }
+    except HTTPException:
+        raise
 
+    except Exception as e:
+        print("=== SPOTIFY UNEXPECTED ERROR ===")
+        print(type(e).__name__)
+        print(str(e))
+        print("================================")
+
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
 
 # ============================================================
 # CREATE SONG
@@ -656,7 +841,7 @@ def create_song(
     ),
     session: Session = Depends(
         get_session
-    )
+    ),
 ):
     target_date = (
         song_in.submission_date
@@ -665,16 +850,15 @@ def create_song(
     )
 
     # IMPORTANT:
-    # Check by the authenticated user.
-    # We do NOT trust a submitter_id coming
-    # from the browser.
+    # Ownership comes from the JWT, NOT from
+    # anything supplied by the browser.
 
     existing = session.exec(
         select(Song).where(
             Song.submitter_id ==
                 current_user.id,
             Song.submission_date ==
-                target_date
+                target_date,
         )
     ).first()
 
@@ -682,16 +866,21 @@ def create_song(
         raise HTTPException(
             status_code=400,
             detail=(
-                "User has already submitted "
-                "a song for this date."
-            )
+                "You have already submitted "
+                "a song for this date. "
+                "Edit your existing submission instead."
+            ),
         )
 
     db_song = Song(
         title=song_in.title,
         artist=song_in.artist,
         submitter_id=current_user.id,
-        submission_date=target_date
+        submission_date=target_date,
+        spotify_url=
+            song_in.spotify_url,
+        spotify_track_id=
+            song_in.spotify_track_id,
     )
 
     session.add(db_song)
@@ -699,6 +888,95 @@ def create_song(
     session.refresh(db_song)
 
     return db_song
+
+
+# ============================================================
+# EDIT SONG
+# ============================================================
+
+@app.put("/api/songs/{song_id}")
+def update_song(
+    song_id: int,
+    song_in: SongUpdate,
+    current_user: User = Depends(
+        get_current_user
+    ),
+    session: Session = Depends(
+        get_session
+    ),
+):
+    song = session.get(
+        Song,
+        song_id
+    )
+
+    if not song:
+        raise HTTPException(
+            status_code=404,
+            detail="Song not found.",
+        )
+
+    # Only the person who submitted this song
+    # may edit it.
+
+    if (
+        song.submitter_id !=
+        current_user.id
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "You can only edit your own song."
+            ),
+        )
+
+    # If the actual Spotify track changed,
+    # existing votes are no longer valid because
+    # they were votes for the old song.
+    track_changed = (
+        song.spotify_track_id !=
+        song_in.spotify_track_id
+    )
+
+    if track_changed:
+        existing_votes = session.exec(
+            select(Vote).where(
+                Vote.song_id ==
+                song.id
+            )
+        ).all()
+
+        for vote in existing_votes:
+            session.delete(vote)
+
+    song.title = song_in.title
+    song.artist = song_in.artist
+    song.spotify_url = (
+        song_in.spotify_url
+    )
+    song.spotify_track_id = (
+        song_in.spotify_track_id
+    )
+
+    session.add(song)
+    session.commit()
+    session.refresh(song)
+
+    return {
+        "id": song.id,
+        "title": song.title,
+        "artist": song.artist,
+        "submitter_id":
+            song.submitter_id,
+        "submission_date":
+            song.submission_date,
+        "spotify_url":
+            song.spotify_url,
+        "spotify_track_id":
+            song.spotify_track_id,
+        "votes_reset":
+            track_changed,
+    }
 
 
 # ============================================================
@@ -713,13 +991,15 @@ def cast_vote(
     ),
     session: Session = Depends(
         get_session
-    )
+    ),
 ):
-    # Validate score on the server too.
+    # Validate the score server-side.
     if vote.score < 1 or vote.score > 5:
         raise HTTPException(
             status_code=400,
-            detail="Score must be between 1 and 5."
+            detail=(
+                "Score must be between 1 and 5."
+            ),
         )
 
     target_song = session.get(
@@ -730,7 +1010,7 @@ def cast_vote(
     if not target_song:
         raise HTTPException(
             status_code=404,
-            detail="Song not found"
+            detail="Song not found",
         )
 
     date_songs = session.exec(
@@ -741,25 +1021,24 @@ def cast_vote(
     ).all()
 
     date_song_ids = [
-        s.id for s in date_songs
+        song.id
+        for song in date_songs
     ]
 
     if date_song_ids:
-        existing_score_vote = (
-            session.exec(
-                select(Vote).where(
-                    Vote.voter_id ==
-                        current_user.id,
-                    Vote.score ==
-                        vote.score,
-                    Vote.song_id.in_(
-                        date_song_ids
-                    ),
-                    Vote.song_id !=
-                        vote.song_id
-                )
-            ).first()
-        )
+        existing_score_vote = session.exec(
+            select(Vote).where(
+                Vote.voter_id ==
+                    current_user.id,
+                Vote.score ==
+                    vote.score,
+                Vote.song_id.in_(
+                    date_song_ids
+                ),
+                Vote.song_id !=
+                    vote.song_id,
+            )
+        ).first()
 
         if existing_score_vote:
             raise HTTPException(
@@ -768,7 +1047,7 @@ def cast_vote(
                     f"Score {vote.score} is "
                     "already assigned to another "
                     "track on this day."
-                )
+                ),
             )
 
     existing_vote = session.exec(
@@ -776,7 +1055,7 @@ def cast_vote(
             Vote.song_id ==
                 vote.song_id,
             Vote.voter_id ==
-                current_user.id
+                current_user.id,
         )
     ).first()
 
@@ -791,7 +1070,7 @@ def cast_vote(
         new_vote = Vote(
             song_id=vote.song_id,
             voter_id=current_user.id,
-            score=vote.score
+            score=vote.score,
         )
 
         session.add(new_vote)
@@ -800,7 +1079,7 @@ def cast_vote(
 
     return {
         "status": "success",
-        "message": "Vote recorded"
+        "message": "Vote recorded",
     }
 
 
@@ -816,23 +1095,27 @@ def delete_vote(
     ),
     session: Session = Depends(
         get_session
-    )
+    ),
 ):
     existing_vote = session.exec(
         select(Vote).where(
-            Vote.song_id == song_id,
+            Vote.song_id ==
+                song_id,
             Vote.voter_id ==
-                current_user.id
+                current_user.id,
         )
     ).first()
 
     if existing_vote:
-        session.delete(existing_vote)
+        session.delete(
+            existing_vote
+        )
+
         session.commit()
 
     return {
         "status": "success",
-        "message": "Vote removed"
+        "message": "Vote removed",
     }
 
 
@@ -848,7 +1131,7 @@ def clear_date_votes(
     ),
     session: Session = Depends(
         get_session
-    )
+    ),
 ):
     songs = session.exec(
         select(Song).where(
@@ -858,7 +1141,8 @@ def clear_date_votes(
     ).all()
 
     song_ids = [
-        s.id for s in songs
+        song.id
+        for song in songs
     ]
 
     if song_ids:
@@ -868,18 +1152,19 @@ def clear_date_votes(
                     current_user.id,
                 Vote.song_id.in_(
                     song_ids
-                )
+                ),
             )
         ).all()
 
-        for v in votes_to_delete:
-            session.delete(v)
+        for vote in votes_to_delete:
+            session.delete(vote)
 
         session.commit()
 
     return {
         "status": "success",
-        "message": "All votes cleared"
+        "message":
+            "All votes cleared",
     }
 
 
@@ -894,7 +1179,7 @@ def get_history(
     specific_date: Optional[str] = None,
     session: Session = Depends(
         get_session
-    )
+    ),
 ):
     users = session.exec(
         select(User)
@@ -904,9 +1189,6 @@ def get_history(
         u.id: u.username
         for u in users
     }
-
-    # Query all songs, optionally filtering
-    # by date.
 
     if specific_date:
         try:
@@ -931,24 +1213,22 @@ def get_history(
             select(Song)
         ).all()
 
-    # Group songs by date
     songs_by_date = {}
 
-    for s in songs:
+    for song in songs:
         songs_by_date.setdefault(
-            s.submission_date,
+            song.submission_date,
             []
-        ).append(s)
+        ).append(song)
 
-    # Newest first
     sorted_dates = sorted(
         list(songs_by_date.keys()),
-        reverse=True
+        reverse=True,
     )
 
-    # Pagination
     paginated_dates = sorted_dates[
-        skip:skip + limit
+        skip:
+        skip + limit
     ]
 
     history_feed = []
@@ -957,10 +1237,10 @@ def get_history(
         day_songs = songs_by_date[d]
 
         song_ids = [
-            s.id for s in day_songs
+            song.id
+            for song in day_songs
         ]
 
-        # Get all votes for songs on this day
         if song_ids:
             day_votes = session.exec(
                 select(Vote).where(
@@ -969,29 +1249,30 @@ def get_history(
                     )
                 )
             ).all()
+
         else:
             day_votes = []
 
         votes_by_song = {
-            s_id: []
-            for s_id in song_ids
+            song_id: []
+            for song_id in song_ids
         }
 
-        for v in day_votes:
+        for vote in day_votes:
             votes_by_song[
-                v.song_id
-            ].append(v)
+                vote.song_id
+            ].append(vote)
 
         leaderboard = []
 
-        for s in day_songs:
+        for song in day_songs:
             song_votes = (
-                votes_by_song[s.id]
+                votes_by_song[song.id]
             )
 
             scores = [
-                v.score
-                for v in song_votes
+                vote.score
+                for vote in song_votes
             ]
 
             avg = (
@@ -1011,34 +1292,46 @@ def get_history(
                 {
                     "username":
                         id_to_username.get(
-                            v.voter_id,
-                            "Unknown"
+                            vote.voter_id,
+                            "Unknown",
                         ),
-                    "score": v.score
+                    "score":
+                        vote.score,
                 }
-                for v in song_votes
+                for vote in song_votes
             ]
 
-            leaderboard.append({
-                "song_id": s.id,
-                "title": s.title,
-                "artist": s.artist,
-                "submittedBy":
-                    id_to_username.get(
-                        s.submitter_id,
-                        "Unknown"
-                    ),
-                "average": avg,
-                "stdev": stdev,
-                "votes": formatted_votes
-            })
+            leaderboard.append(
+                {
+                    "song_id":
+                        song.id,
+                    "title":
+                        song.title,
+                    "artist":
+                        song.artist,
+                    "submittedBy":
+                        id_to_username.get(
+                            song.submitter_id,
+                            "Unknown",
+                        ),
+                    "average":
+                        avg,
+                    "stdev":
+                        stdev,
+                    "votes":
+                        formatted_votes,
+                    "spotify_url":
+                        song.spotify_url,
+                    "spotify_track_id":
+                        song.spotify_track_id,
+                }
+            )
 
-        # Lower average is better
         if leaderboard:
             leaderboard.sort(
-                key=lambda x: (
-                    x["average"],
-                    x["stdev"]
+                key=lambda item: (
+                    item["average"],
+                    item["stdev"],
                 )
             )
 
@@ -1055,11 +1348,16 @@ def get_history(
                     "No votes cast"
             }
 
-        history_feed.append({
-            "date": d.isoformat(),
-            "winner": winner,
-            "leaderboard": leaderboard
-        })
+        history_feed.append(
+            {
+                "date":
+                    d.isoformat(),
+                "winner":
+                    winner,
+                "leaderboard":
+                    leaderboard,
+            }
+        )
 
     return history_feed
 
@@ -1073,7 +1371,7 @@ def get_global_stats(
     days: int = 28,
     session: Session = Depends(
         get_session
-    )
+    ),
 ):
     users = session.exec(
         select(User)
@@ -1088,64 +1386,64 @@ def get_global_stats(
     ).all()
 
     usernames = [
-        u.username
-        for u in users
+        user.username
+        for user in users
     ]
 
     id_to_username = {
-        u.id: u.username
-        for u in users
+        user.id: user.username
+        for user in users
     }
 
     votes_by_song = {
-        s.id: []
-        for s in songs
+        song.id: []
+        for song in songs
     }
 
-    for v in votes:
-        if v.song_id in votes_by_song:
+    for vote in votes:
+        if vote.song_id in votes_by_song:
             votes_by_song[
-                v.song_id
-            ].append(v)
+                vote.song_id
+            ].append(vote)
 
     songs_by_date = {}
 
-    for s in songs:
+    for song in songs:
         songs_by_date.setdefault(
-            s.submission_date,
+            song.submission_date,
             []
-        ).append(s)
+        ).append(song)
 
     sorted_dates = sorted(
         list(songs_by_date.keys())
     )
 
     cumulative_wins = {
-        u.username: 0
-        for u in users
+        user.username: 0
+        for user in users
     }
 
     chart_data = []
 
     user_place_counts = {
-        u.username: {
+        user.username: {
             1: 0,
             2: 0,
             3: 0,
             4: 0,
-            5: 0
+            5: 0,
         }
-        for u in users
+        for user in users
     }
 
     user_sum_avg = {
-        u.username: 0.0
-        for u in users
+        user.username: 0.0
+        for user in users
     }
 
     user_submissions = {
-        u.username: 0
-        for u in users
+        user.username: 0
+        for user in users
     }
 
     for d in sorted_dates:
@@ -1153,15 +1451,18 @@ def get_global_stats(
 
         day_results = []
 
-        for s in day_songs:
+        for song in day_songs:
             song_votes = (
-                votes_by_song[s.id]
+                votes_by_song[song.id]
             )
 
-            if len(song_votes) == len(users):
+            if (
+                len(song_votes) ==
+                len(users)
+            ):
                 scores = [
-                    v.score
-                    for v in song_votes
+                    vote.score
+                    for vote in song_votes
                 ]
 
                 avg = (
@@ -1179,14 +1480,18 @@ def get_global_stats(
                     else 0
                 )
 
-                day_results.append({
-                    "submitter":
-                        id_to_username[
-                            s.submitter_id
-                        ],
-                    "average": avg,
-                    "stdev": stdev
-                })
+                day_results.append(
+                    {
+                        "submitter":
+                            id_to_username[
+                                song.submitter_id
+                            ],
+                        "average":
+                            avg,
+                        "stdev":
+                            stdev,
+                    }
+                )
 
         if (
             len(day_results) ==
@@ -1194,9 +1499,9 @@ def get_global_stats(
             and len(day_songs) > 0
         ):
             day_results.sort(
-                key=lambda x: (
-                    x["average"],
-                    x["stdev"]
+                key=lambda item: (
+                    item["average"],
+                    item["stdev"],
                 )
             )
 
@@ -1223,22 +1528,25 @@ def get_global_stats(
                 data_point
             )
 
-            for rank, res in enumerate(
+            for rank, result in enumerate(
                 day_results
             ):
                 place = rank + 1
 
                 submitter = (
-                    res["submitter"]
+                    result["submitter"]
                 )
 
-                user_place_counts[
+                if place in user_place_counts[
                     submitter
-                ][place] += 1
+                ]:
+                    user_place_counts[
+                        submitter
+                    ][place] += 1
 
                 user_sum_avg[
                     submitter
-                ] += res["average"]
+                ] += result["average"]
 
                 user_submissions[
                     submitter
@@ -1246,51 +1554,62 @@ def get_global_stats(
 
     manager_stats = []
 
-    for u in users:
-        uname = u.username
+    for user in users:
+        username = user.username
 
         wins = (
             cumulative_wins[
-                uname
+                username
             ]
         )
 
         sum_avg = (
             user_sum_avg[
-                uname
+                username
             ]
         )
 
-        subs = (
+        submissions = (
             user_submissions[
-                uname
+                username
             ]
         )
 
         overall_avg = (
-            sum_avg / subs
-            if subs > 0
+            sum_avg /
+            submissions
+            if submissions > 0
             else 0.0
         )
 
-        manager_stats.append({
-            "manager": uname,
-            "wins": wins,
-            "sum_avg":
-                round(sum_avg, 2),
-            "overall_avg":
-                round(overall_avg, 2)
-        })
+        manager_stats.append(
+            {
+                "manager":
+                    username,
+                "wins":
+                    wins,
+                "sum_avg":
+                    round(
+                        sum_avg,
+                        2,
+                    ),
+                "overall_avg":
+                    round(
+                        overall_avg,
+                        2,
+                    ),
+            }
+        )
 
     manager_stats.sort(
-        key=lambda x: x["wins"],
-        reverse=True
+        key=lambda item: item["wins"],
+        reverse=True,
     )
 
-    for idx, stat in enumerate(
+    for index, stat in enumerate(
         manager_stats
     ):
-        stat["place"] = idx + 1
+        stat["place"] = index + 1
 
     target_dates = (
         sorted_dates[-days:]
@@ -1299,112 +1618,140 @@ def get_global_stats(
     )
 
     raw_matrix = {
-        p: {
-            v: []
-            for v in usernames
+        poster: {
+            voter: []
+            for voter in usernames
         }
-        for p in usernames
+        for poster in usernames
     }
 
     for d in target_dates:
-        for s in songs_by_date[d]:
+        for song in songs_by_date[d]:
             poster = id_to_username[
-                s.submitter_id
+                song.submitter_id
             ]
 
-            for v in votes_by_song[
-                s.id
+            for vote in votes_by_song[
+                song.id
             ]:
                 voter = id_to_username[
-                    v.voter_id
+                    vote.voter_id
                 ]
 
                 raw_matrix[
                     poster
                 ][voter].append(
-                    v.score
+                    vote.score
                 )
 
     matrices = {
         "average": {
-            p: {}
-            for p in usernames
+            poster: {}
+            for poster in usernames
         },
         "median": {
-            p: {}
-            for p in usernames
+            poster: {}
+            for poster in usernames
         },
         "stdev": {
-            p: {}
-            for p in usernames
+            poster: {}
+            for poster in usernames
         },
         "mode": {
-            p: {}
-            for p in usernames
+            poster: {}
+            for poster in usernames
         },
         "best": {
-            p: {}
-            for p in usernames
+            poster: {}
+            for poster in usernames
         },
         "worst": {
-            p: {}
-            for p in usernames
-        }
+            poster: {}
+            for poster in usernames
+        },
     }
 
-    def safe_mode(lst):
+    def safe_mode(values):
         try:
-            return statistics.mode(lst)
-        except:
+            return statistics.mode(
+                values
+            )
+        except statistics.StatisticsError:
             return (
-                lst[0]
-                if lst
+                values[0]
+                if values
                 else 0
             )
 
-    for p in usernames:
-        for v in usernames:
-            scores = raw_matrix[p][v]
+    for poster in usernames:
+        for voter in usernames:
+            scores = raw_matrix[
+                poster
+            ][voter]
 
             if scores:
-                matrices["average"][p][v] = round(
-                    sum(scores) / len(scores),
-                    2
+                matrices[
+                    "average"
+                ][poster][voter] = round(
+                    sum(scores) /
+                    len(scores),
+                    2,
                 )
 
-                matrices["median"][p][v] = round(
-                    statistics.median(scores),
-                    2
+                matrices[
+                    "median"
+                ][poster][voter] = round(
+                    statistics.median(
+                        scores
+                    ),
+                    2,
                 )
 
-                matrices["stdev"][p][v] = round(
-                    statistics.stdev(scores),
-                    2
+                matrices[
+                    "stdev"
+                ][poster][voter] = round(
+                    statistics.stdev(
+                        scores
+                    ),
+                    2,
                 ) if len(scores) > 1 else 0.0
 
-                matrices["mode"][p][v] = round(
+                matrices[
+                    "mode"
+                ][poster][voter] = round(
                     safe_mode(scores),
-                    2
+                    2,
                 )
 
-                matrices["best"][p][v] = round(
+                matrices[
+                    "best"
+                ][poster][voter] = round(
                     min(scores),
-                    2
+                    2,
                 )
 
-                matrices["worst"][p][v] = round(
+                matrices[
+                    "worst"
+                ][poster][voter] = round(
                     max(scores),
-                    2
+                    2,
                 )
 
             else:
-                for k in matrices:
-                    matrices[k][p][v] = 0.0
+                for key in matrices:
+                    matrices[
+                        key
+                    ][poster][voter] = 0.0
 
     return {
-        "chart_data": chart_data,
-        "manager_stats": manager_stats,
-        "rank_counts": user_place_counts,
-        "matrices": matrices,
-        "usernames": usernames
+        "chart_data":
+            chart_data,
+        "manager_stats":
+            manager_stats,
+        "rank_counts":
+            user_place_counts,
+        "matrices":
+            matrices,
+        "usernames":
+            usernames,
     }
