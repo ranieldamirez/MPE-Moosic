@@ -130,7 +130,7 @@ export default function App() {
             aria-label="Go to Moosic home"
           >
             <img
-              src="./public/hamster.png"
+              src="/hamster.png"
               alt="MPE Moosic logo"
               style={{
                 width: '52px',
