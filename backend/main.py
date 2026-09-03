@@ -24,10 +24,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-sqlite_file_name = "moosic_local.db"
-sqlite_url = f"sqlite:///{sqlite_file_name}"
-engine = create_engine(sqlite_url, connect_args={"check_same_thread": False})
+# Fetch the database URL from Render, default to local SQLite if missing
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///moosic_local.db")
 
+# SQLAlchemy requires the prefix 'postgresql://' but some hosts provide 'postgres://'
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
+# SQLite needs the check_same_thread workaround; Postgres does not
+if DATABASE_URL.startswith("sqlite"):
+    engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+else:
+    engine = create_engine(DATABASE_URL)
+    
 class User(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     username: str = Field(unique=True, index=True)
