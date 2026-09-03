@@ -1,0 +1,13 @@
+# Python / FastAPI
+__pycache__/
+*.py[cod]
+*.db
+.venv/
+env/
+.env
+
+# React / Vite
+node_modules/
+dist/
+.DS_Store
+.env
