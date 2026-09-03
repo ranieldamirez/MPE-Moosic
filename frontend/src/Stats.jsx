@@ -231,7 +231,7 @@ export default function Stats() {
 
       {/* Third Row: The 6 Matrices Grid */}
       {stats.matrices && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(550px, 1fr))', gap: '1rem' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(600px, 1fr))', gap: '1rem' }}>
           <MatrixTable title="Average Score for past" daysFilter={daysFilter} users={users} dataObj={stats.matrices.average} />
           <MatrixTable title="Median Score for past" daysFilter={daysFilter} users={users} dataObj={stats.matrices.median} />
           <MatrixTable title="Standard Deviation for past" daysFilter={daysFilter} users={users} dataObj={stats.matrices.stdev} />
