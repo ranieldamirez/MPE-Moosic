@@ -122,7 +122,7 @@ const WinsLineChart = ({ data, users }) => {
 export default function Stats() {
   const [stats, setStats] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [daysFilter, setDaysFilter] = useState(28); 
+  const [daysFilter, setDaysFilter] = useState(30); 
 
   useEffect(() => {
     const fetchStats = async () => {
@@ -168,7 +168,7 @@ export default function Stats() {
       </div>
 
       {/* Second Row: Static Lifetime Tables */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(450px, 1fr))', gap: '1rem' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(350px, 1fr))', gap: '1rem' }}>
         
         <div style={{ background: 'var(--bg-card)', borderRadius: '8px', overflow: 'hidden', border: '1px solid var(--border-color)' }}>
           <div style={{ background: '#000', padding: '0.5rem', textAlign: 'center' }}>
@@ -186,9 +186,9 @@ export default function Stats() {
                 </tr>
               </thead>
               <tbody>
-                {(stats.Player_stats || []).map((s) => (
-                  <tr key={s.Player}>
-                    <Td bg={getUserColor(s.Player)} color="#000"><strong>{s.Player}</strong></Td>
+                {(stats.manager_stats || []).map((s) => (
+                  <tr key={s.manager}>
+                    <Td bg={getUserColor(s.manager)} color="#000"><strong>{s.manager}</strong></Td>
                     <Td>{s.wins || 0}</Td>
                     <Td>{(s.sum_avg || 0).toFixed(2)}</Td>
                     <Td>{(s.overall_avg || 0).toFixed(2)}</Td>
@@ -231,7 +231,7 @@ export default function Stats() {
 
       {/* Third Row: The 6 Matrices Grid */}
       {stats.matrices && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(450px, 1fr))', gap: '1.5rem' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(350px, 1fr))', gap: '1rem' }}>
           <MatrixTable title="Average Score for past" daysFilter={daysFilter} users={users} dataObj={stats.matrices.average} />
           <MatrixTable title="Median Score for past" daysFilter={daysFilter} users={users} dataObj={stats.matrices.median} />
           <MatrixTable title="Standard Deviation for past" daysFilter={daysFilter} users={users} dataObj={stats.matrices.stdev} />

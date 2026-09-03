@@ -43,7 +43,7 @@ export default function App() {
     <div style={{ minHeight: '100vh', background: 'var(--bg-primary)', color: 'var(--text-main)', padding: '2rem' }}>
       
       {/* Centered Max-Width Wrapper to prevent wide-screen stretching */}
-      <div style={{ maxWidth: '1000px', margin: '0 auto' }}>
+      <div style={{ maxWidth: '1200px', margin: '0 auto' }}>
         
         <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '1rem' }}>
           <h1 style={{ fontSize: '1.8rem', fontWeight: 'bold', letterSpacing: '-0.5px' }}>MPE • Moosic</h1>
@@ -52,7 +52,9 @@ export default function App() {
             {isLoggedIn ? (
               <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                 <span style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-                  Signed in as <strong style={{ color: 'var(--text-main)' }}>{currentUser?.username || 'User'}</strong>
+                  Signed in as <strong style={{ color: 'var(--text-main)' }}>
+                    {typeof currentUser === 'string' ? currentUser : (currentUser?.username || localStorage.getItem('user') || 'User')}
+                  </strong>
                 </span>
                 <button onClick={handleLogout} style={{
                   background: 'transparent', color: '#ff4757', border: '1px solid #ff4757',
