@@ -2,7 +2,9 @@ import { useState } from 'react';
 import './index.css';
 
 export default function Profile({ currentUser, onProfileUpdate }) {
-  const [username, setUsername] = useState(currentUser.username);
+  // Safely check for the username, falling back to localStorage if the prop is missing!
+  const defaultUser = currentUser?.username || currentUser || localStorage.getItem('user') || '';
+  const [username, setUsername] = useState(defaultUser);
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   
